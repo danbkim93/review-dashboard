@@ -12,7 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import openpyxl
 from openpyxl.utils import column_index_from_string
@@ -32,7 +32,7 @@ PRODUCT_COLORS = [
 
 # ─── Data Loading ───────────────────────────────────────────────────────────
 
-@st.cache_data
+@st.cache_data(ttl=60)
 def load_data():
     with open(os.path.join(BASE_DIR, "keepa_deduped_catalog.json")) as f:
         catalog = json.load(f)
@@ -237,6 +237,79 @@ def compute_metrics(products):
         m["early_growth_mo"] = m["recent_growth_mo"] = 0
         m["growth_dir"] = "UNKNOWN"
 
+    # Rating and review trends over specific time windows (6mo, 1yr, 2yr)
+    m["rating_periods"] = {}
+    m["review_periods"] = {}
+    if rh and len(rh) >= 2:
+        latest_r_dt = datetime.fromisoformat(rh[-1]["date"])
+        latest_rating = rh[-1]["rating"]
+        for label, months_back in [("6mo", 6), ("1yr", 12), ("2yr", 24)]:
+            cutoff_dt = latest_r_dt - timedelta(days=months_back * 30.44)
+            cutoff_iso = cutoff_dt.isoformat()
+            past_entries = [r for r in rh if r["date"] <= cutoff_iso]
+            if past_entries:
+                ref_entry = past_entries[-1]
+                ref_rating = ref_entry["rating"]
+                delta = latest_rating - ref_rating
+                m["rating_periods"][label] = {
+                    "from_month": ref_entry["date"][:7],
+                    "from_rating": ref_rating,
+                    "to_rating": latest_rating,
+                    "delta": delta,
+                }
+    if ch and len(ch) >= 2:
+        latest_c_dt = datetime.fromisoformat(ch[-1]["date"])
+        latest_count = ch[-1]["count"]
+        for label, months_back in [("6mo", 6), ("1yr", 12), ("2yr", 24)]:
+            cutoff_dt = latest_c_dt - timedelta(days=months_back * 30.44)
+            cutoff_iso = cutoff_dt.isoformat()
+            past_entries = [c for c in ch if c["date"] <= cutoff_iso]
+            if past_entries:
+                ref_entry = past_entries[-1]
+                ref_count = ref_entry["count"]
+                added = latest_count - ref_count
+                span_months = max(1, (latest_c_dt - datetime.fromisoformat(ref_entry["date"])).days / 30.44)
+                m["review_periods"][label] = {
+                    "from_month": ref_entry["date"][:7],
+                    "from_count": ref_count,
+                    "to_count": latest_count,
+                    "added": added,
+                    "per_month": added / span_months,
+                }
+
+    # Sales rank for main product — compute over specific time windows
+    rank_data = main.get("monthly_avg_rank", {})
+    if rank_data and len(rank_data) >= 2:
+        rank_months = sorted(rank_data.keys())
+        m["main_rank_recent"] = rank_data[rank_months[-1]]
+        m["main_rank_recent_month"] = rank_months[-1]
+        m["main_rank_best"] = min(rank_data.values())
+        m["main_rank_worst"] = max(rank_data.values())
+
+        # Compute rank change over 6mo, 1yr, 2yr windows
+        latest_dt = datetime.strptime(rank_months[-1], "%Y-%m")
+        m["main_rank_periods"] = {}
+        for label, months_back in [("6mo", 6), ("1yr", 12), ("2yr", 24)]:
+            cutoff_dt = latest_dt - timedelta(days=months_back * 30.44)
+            cutoff_ym = cutoff_dt.strftime("%Y-%m")
+            # Find the closest month at or after the cutoff
+            past_months = [mo for mo in rank_months if mo <= cutoff_ym]
+            if past_months:
+                ref_month = past_months[-1]
+                ref_rank = rank_data[ref_month]
+                current_rank = m["main_rank_recent"]
+                pct_change = (current_rank - ref_rank) / ref_rank * 100 if ref_rank > 0 else 0
+                m["main_rank_periods"][label] = {
+                    "from_month": ref_month,
+                    "from_rank": ref_rank,
+                    "to_rank": current_rank,
+                    "pct_change": pct_change,
+                }
+    else:
+        m["main_rank_recent"] = m["main_rank_best"] = m["main_rank_worst"] = None
+        m["main_rank_recent_month"] = None
+        m["main_rank_periods"] = {}
+
     return m
 
 
@@ -270,11 +343,32 @@ def filter_products(products, start_date, end_date):
         fp["review_count_history"] = [
             c for c in p["review_count_history"] if start_str <= c["date"][:10] <= end_str
         ]
-        if p.get("monthly_avg_rank"):
-            fp["monthly_avg_rank"] = {
-                m: v for m, v in p["monthly_avg_rank"].items()
-                if start_str[:7] <= m <= end_str[:7]
-            }
+        fp["amazon_price_history"] = [
+            pt for pt in p.get("amazon_price_history", []) if start_str <= pt["date"][:10] <= end_str
+        ]
+        fp["marketplace_price_history"] = [
+            pt for pt in p.get("marketplace_price_history", []) if start_str <= pt["date"][:10] <= end_str
+        ]
+        for dict_field in ["monthly_avg_rank", "monthly_seller_count"]:
+            if p.get(dict_field):
+                fp[dict_field] = {
+                    m: v for m, v in p[dict_field].items()
+                    if start_str[:7] <= m <= end_str[:7]
+                }
+        fp["monthly_sold_history"] = [
+            pt for pt in p.get("monthly_sold_history", []) if start_str <= pt["date"][:10] <= end_str
+        ]
+        fp["list_price_history"] = [
+            pt for pt in p.get("list_price_history", []) if start_str <= pt["date"][:10] <= end_str
+        ]
+        fp["lightning_deals"] = [
+            d for d in p.get("lightning_deals", []) if start_str <= d["date"][:10] <= end_str
+        ]
+        fp["stockouts"] = [
+            s for s in p.get("stockouts", []) if start_str <= s["start"][:10] <= end_str
+        ]
+        fp["buybox_sellers"] = p.get("buybox_sellers", [])
+        fp["buybox_changes"] = p.get("buybox_changes", 0)
         filtered.append(fp)
     return filtered
 
@@ -317,6 +411,131 @@ def short_title(title, max_len=80):
 
 
 # ─── Chart Helpers ──────────────────────────────────────────────────────────
+
+def detect_rating_spikes(rh, threshold=0.2):
+    """Detect significant rating jumps/drops between consecutive data points."""
+    spikes = []
+    for i in range(1, len(rh)):
+        delta = rh[i]["rating"] - rh[i - 1]["rating"]
+        if abs(delta) >= threshold:
+            spikes.append({
+                "date": rh[i]["date"],
+                "rating": rh[i]["rating"],
+                "delta": delta,
+                "direction": "drop" if delta < 0 else "jump",
+            })
+    return spikes
+
+
+def detect_review_spikes(ch, threshold_multiplier=2.5):
+    """Detect review purges (count drops) and unusual surges."""
+    spikes = []
+    if len(ch) < 3:
+        return spikes
+
+    # Calculate per-interval changes
+    changes = []
+    for i in range(1, len(ch)):
+        days = max(1, (datetime.fromisoformat(ch[i]["date"]) - datetime.fromisoformat(ch[i - 1]["date"])).days)
+        change = ch[i]["count"] - ch[i - 1]["count"]
+        rate = change / (days / 30.44)  # normalize to per-month
+        changes.append({"idx": i, "change": change, "rate": rate, "days": days})
+
+    # Purges (any drop > 5)
+    for c in changes:
+        if c["change"] < -5:
+            spikes.append({
+                "date": ch[c["idx"]]["date"],
+                "count": ch[c["idx"]]["count"],
+                "change": c["change"],
+                "direction": "purge",
+            })
+
+    # Surges (rate > threshold_multiplier * median positive rate)
+    positive_rates = [c["rate"] for c in changes if c["rate"] > 0]
+    if len(positive_rates) >= 4:
+        positive_rates_sorted = sorted(positive_rates)
+        median_rate = positive_rates_sorted[len(positive_rates_sorted) // 2]
+        for c in changes:
+            if c["rate"] > median_rate * threshold_multiplier and c["rate"] > 20:
+                spikes.append({
+                    "date": ch[c["idx"]]["date"],
+                    "count": ch[c["idx"]]["count"],
+                    "change": c["change"],
+                    "direction": "surge",
+                })
+
+    return spikes
+
+
+def render_notable_events(target_products, label):
+    """Render the two side-by-side notable events tables for a list of products."""
+    st.subheader(f"Notable Events ({label})")
+    st.caption("Click column headers to sort — sort by Change to see the largest spikes first.")
+
+    all_rating_events = []
+    all_review_events = []
+    for p in target_products:
+        name = product_name(p, short=True)
+        for s in detect_rating_spikes(p["rating_history"]):
+            all_rating_events.append({
+                "Product": name,
+                "Date": s["date"][:7],
+                "Type": "Drop" if s["direction"] == "drop" else "Jump",
+                "From": round(s["rating"] - s["delta"], 1),
+                "To": round(s["rating"], 1),
+                "Change": round(s["delta"], 2),
+                "Significance": "Possible quality issue or product change" if s["direction"] == "drop" else "Recovery or data correction",
+            })
+        for s in detect_review_spikes(p["review_count_history"]):
+            all_review_events.append({
+                "Product": name,
+                "Date": s["date"][:7],
+                "Type": "Purge" if s["direction"] == "purge" else "Surge",
+                "Change": s["change"],
+                "Count After": s["count"],
+                "Significance": "Amazon removed reviews — past review manipulation flagged" if s["direction"] == "purge" else "Unusually high number of new reviews in a short period — worth checking if reviews are genuine",
+            })
+
+    all_price_events = []
+    for p in target_products:
+        name = product_name(p, short=True)
+        for s in detect_price_spikes(p.get("marketplace_price_history", [])):
+            all_price_events.append({
+                "Product": name,
+                "Date": s["date"][:7],
+                "Type": "Increase" if s["direction"] == "increase" else "Decrease",
+                "From": f"${s['prev_price']:.2f}",
+                "To": f"${s['price']:.2f}",
+                "Change": f"{s['pct_change']:+.0%}",
+                "Significance": "Price increase — higher margin per sale but may reduce the number of sales" if s["direction"] == "increase" else "Price drop — lower margin per sale, likely due to competition or clearing inventory",
+            })
+
+    col_r, col_v, col_p = st.columns(3)
+    with col_r:
+        st.markdown("**Rating Changes** (drops/jumps > 0.2)")
+        if all_rating_events:
+            df_r = pd.DataFrame(all_rating_events).sort_values("Change")
+            st.dataframe(df_r, use_container_width=True, hide_index=True)
+        else:
+            st.success("No significant rating spikes detected.")
+
+    with col_v:
+        st.markdown("**Review Changes** (purges & unusual surges)")
+        if all_review_events:
+            df_v = pd.DataFrame(all_review_events).sort_values("Change")
+            st.dataframe(df_v, use_container_width=True, hide_index=True)
+        else:
+            st.success("No review purges or unusual surges detected.")
+
+    with col_p:
+        st.markdown("**Price Changes** (>20% between data points)")
+        if all_price_events:
+            df_p = pd.DataFrame(all_price_events).sort_values("Change")
+            st.dataframe(df_p, use_container_width=True, hide_index=True)
+        else:
+            st.success("No significant price changes detected.")
+
 
 def make_rating_chart(products, title, colors=None):
     fig = go.Figure()
@@ -489,8 +708,524 @@ def make_combined_chart(products, metric_type, title, colors=None):
         return fig
 
 
-def make_sales_rank_chart(products, title):
+def make_price_chart(products, title, colors=None):
+    """Create a price history chart showing marketplace (seller) price over time."""
     fig = go.Figure()
+    has_data = False
+    for i, p in enumerate(products):
+        ph = p.get("marketplace_price_history", [])
+        if not ph:
+            continue
+        has_data = True
+        dates = [pt["date"] for pt in ph]
+        prices = [pt["price"] for pt in ph]
+        color = (colors or PRODUCT_COLORS)[i % len(colors or PRODUCT_COLORS)]
+        latest_price = prices[-1] if prices else 0
+        fig.add_trace(go.Scatter(
+            x=dates, y=prices, mode="lines+markers",
+            name=f"{product_name(p, short=True)} (${latest_price:.2f})",
+            line=dict(width=2, color=color),
+            marker=dict(size=4),
+        ))
+
+    if not has_data:
+        fig.add_annotation(text="No price data available", xref="paper", yref="paper",
+                           x=0.5, y=0.5, showarrow=False, font=dict(size=16))
+
+    layout_kwargs = dict(
+        title=dict(text=f"{title}<br><sup>Marketplace (seller) price over time — the price customers pay on Amazon. Source: Keepa API (keepa.com)</sup>"),
+        yaxis_title="Price (USD)",
+        yaxis=dict(tickprefix="$", rangemode="tozero"),
+        height=450,
+        legend=dict(font=dict(size=10)),
+        margin=dict(l=60, r=20, t=70, b=40),
+    )
+    if len(products) > 1:
+        layout_kwargs["legend"] = dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5, font=dict(size=10))
+        layout_kwargs["margin"] = dict(l=60, r=20, t=70, b=80)
+        layout_kwargs["height"] = 480
+    fig.update_layout(**layout_kwargs)
+    return fig
+
+
+def _make_price_vs_velocity_chart(product, title):
+    """Dual-axis chart: price over time vs review velocity."""
+    ph = product.get("marketplace_price_history", [])
+    ch = product.get("review_count_history", [])
+    if not ph or len(ch) < 4:
+        return None
+
+    price_by_month = {}
+    for pt in ph:
+        price_by_month.setdefault(pt["date"][:7], []).append(pt["price"])
+    monthly_price = {m: sum(v) / len(v) for m, v in sorted(price_by_month.items())}
+
+    count_by_month = {}
+    for c in ch:
+        count_by_month[c["date"][:7]] = c["count"]
+    ms = sorted(count_by_month.keys())
+    vel_by_month = {}
+    for i in range(1, len(ms)):
+        vel_by_month[ms[i]] = max(0, count_by_month[ms[i]] - count_by_month[ms[i - 1]])
+
+    common = sorted(set(monthly_price) & set(vel_by_month))
+    if len(common) < 3:
+        return None
+
+    dates = [datetime.strptime(m, "%Y-%m") for m in common]
+    prices = [monthly_price[m] for m in common]
+    vels = [vel_by_month[m] for m in common]
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(x=dates, y=prices, mode="lines+markers", name="Avg Price",
+                   line=dict(width=2.5, color="#ffd93d"), marker=dict(size=4)),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Bar(x=dates, y=vels, name="New Reviews/mo",
+               marker_color="rgba(0,212,170,0.4)"),
+        secondary_y=True,
+    )
+    fig.update_layout(
+        title=dict(text=f"{title}<br><sup>Gold line = seller price. Green bars = new reviews that month (purge months excluded).</sup>"),
+        yaxis=dict(title="Price (USD)", tickprefix="$"),
+        yaxis2=dict(title="New Reviews / Month", rangemode="tozero"),
+        height=420,
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, font=dict(size=10)),
+        margin=dict(l=60, r=60, t=70, b=80),
+    )
+    return fig
+
+
+def _make_price_vs_rating_chart(product, title):
+    """Dual-axis chart: price over time vs rating."""
+    ph = product.get("marketplace_price_history", [])
+    rh = product.get("rating_history", [])
+    if not ph or len(rh) < 4:
+        return None
+
+    price_by_month = {}
+    for pt in ph:
+        price_by_month.setdefault(pt["date"][:7], []).append(pt["price"])
+    monthly_price = {m: sum(v) / len(v) for m, v in sorted(price_by_month.items())}
+
+    rating_by_month = {}
+    for r in rh:
+        rating_by_month.setdefault(r["date"][:7], []).append(r["rating"])
+    monthly_rating = {m: sum(v) / len(v) for m, v in sorted(rating_by_month.items())}
+
+    common = sorted(set(monthly_price) & set(monthly_rating))
+    if len(common) < 3:
+        return None
+
+    dates = [datetime.strptime(m, "%Y-%m") for m in common]
+    prices = [monthly_price[m] for m in common]
+    ratings = [monthly_rating[m] for m in common]
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(x=dates, y=prices, mode="lines+markers", name="Avg Price",
+                   line=dict(width=2.5, color="#ffd93d"), marker=dict(size=4)),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(x=dates, y=ratings, mode="lines+markers", name="Rating",
+                   line=dict(width=2.5, color="#c084fc"), marker=dict(size=5)),
+        secondary_y=True,
+    )
+    fig.update_layout(
+        title=dict(text=f"{title}<br><sup>Gold line = seller price. Purple line = star rating. Look for inverse patterns (price up, rating down).</sup>"),
+        yaxis=dict(title="Price (USD)", tickprefix="$"),
+        yaxis2=dict(title="Rating", range=[2.5, 5.1], dtick=0.5),
+        height=420,
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, font=dict(size=10)),
+        margin=dict(l=60, r=60, t=70, b=80),
+    )
+    return fig
+
+
+def _make_price_scatter(product):
+    """Scatter plots with best-fit regression: price vs rating and price vs velocity."""
+    ph = product.get("marketplace_price_history", [])
+    ch = product.get("review_count_history", [])
+    rh = product.get("rating_history", [])
+    if not ph:
+        return None, None
+
+    # Build monthly aggregates
+    price_by_m = {}
+    for pt in ph:
+        price_by_m.setdefault(pt["date"][:7], []).append(pt["price"])
+    monthly_price = {m: sum(v) / len(v) for m, v in price_by_m.items()}
+
+    def best_fit(x, y):
+        """Try poly degrees 1-3, pick best by adjusted R². Return (degree, coeffs, r2)."""
+        n = len(x)
+        best_deg, best_r2, best_coeffs = 1, -1, None
+        for deg in range(1, min(4, n - 1)):
+            coeffs = np.polyfit(x, y, deg)
+            y_pred = np.polyval(coeffs, x)
+            ss_res = np.sum((y - y_pred) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            if ss_tot == 0:
+                continue
+            r2 = 1 - ss_res / ss_tot
+            # Adjusted R² penalizes higher degrees
+            adj_r2 = 1 - (1 - r2) * (n - 1) / max(1, n - deg - 1)
+            if adj_r2 > best_r2:
+                best_deg, best_r2, best_coeffs = deg, adj_r2, coeffs
+        return best_deg, best_coeffs, best_r2
+
+    def make_scatter_fig(prices, values, y_label, title_suffix):
+        x = np.array(prices)
+        y = np.array(values)
+        deg, coeffs, r2 = best_fit(x, y)
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=x, y=y, mode="markers", name="Monthly data",
+            marker=dict(size=8, color="#00d4aa", opacity=0.7),
+        ))
+
+        # Smooth fit line
+        x_fit = np.linspace(x.min(), x.max(), 100)
+        y_fit = np.polyval(coeffs, x_fit)
+        deg_labels = {1: "Linear", 2: "Quadratic", 3: "Cubic"}
+        fig.add_trace(go.Scatter(
+            x=x_fit, y=y_fit, mode="lines",
+            name=f"{deg_labels.get(deg, f'Poly-{deg}')} fit (R²={r2:.2f})",
+            line=dict(width=2.5, color="#ff6b6b", dash="dash"),
+        ))
+
+        fig.update_layout(
+            title=dict(text=f"Price vs {title_suffix}<br><sup>{deg_labels.get(deg, f'Poly-{deg}')} best fit — R² = {r2:.2f} {'(good fit)' if r2 >= 0.4 else '(weak fit — no clear pattern)'}</sup>"),
+            xaxis=dict(title="Price (USD)", tickprefix="$"),
+            yaxis=dict(title=y_label),
+            height=420,
+            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, font=dict(size=10)),
+            margin=dict(l=60, r=20, t=70, b=80),
+        )
+        return fig
+
+    # Price vs Rating scatter
+    fig_rating = None
+    rating_by_m = {}
+    for r in rh:
+        rating_by_m.setdefault(r["date"][:7], []).append(r["rating"])
+    monthly_rating = {m: sum(v) / len(v) for m, v in rating_by_m.items()}
+    common_r = sorted(set(monthly_price) & set(monthly_rating))
+    if len(common_r) >= 5:
+        fig_rating = make_scatter_fig(
+            [monthly_price[m] for m in common_r],
+            [monthly_rating[m] for m in common_r],
+            "Rating", "Rating",
+        )
+
+    # Price vs Velocity scatter
+    fig_velocity = None
+    count_by_m = {}
+    for c in ch:
+        count_by_m[c["date"][:7]] = c["count"]
+    ms = sorted(count_by_m.keys())
+    vel_by_m = {}
+    for i in range(1, len(ms)):
+        vel_by_m[ms[i]] = max(0, count_by_m[ms[i]] - count_by_m[ms[i - 1]])
+    common_v = sorted(set(monthly_price) & set(vel_by_m))
+    if len(common_v) >= 5:
+        fig_velocity = make_scatter_fig(
+            [monthly_price[m] for m in common_v],
+            [vel_by_m[m] for m in common_v],
+            "New Reviews / Month", "Review Velocity",
+        )
+
+    return fig_rating, fig_velocity
+
+
+def _ai_caption(text):
+    """Render a standardized AI analysis caption."""
+    st.caption(f"*AI analysis (Claude):* {text}")
+
+
+def _analyze_rating(products):
+    """Generate AI analysis for a rating chart."""
+    summaries = []
+    for p in products:
+        rh = p["rating_history"]
+        if len(rh) < 2:
+            continue
+        name = product_name(p, short=True)
+        first_r, last_r = rh[0]["rating"], rh[-1]["rating"]
+        delta = last_r - first_r
+        if abs(delta) <= 0.1:
+            summaries.append(f"{name} stable at {last_r:.1f}")
+        elif delta > 0:
+            summaries.append(f"{name} up from {first_r:.1f} to {last_r:.1f}")
+        else:
+            summaries.append(f"{name} down from {first_r:.1f} to {last_r:.1f}")
+    if not summaries:
+        return None
+    # Factual stake
+    below_threshold = [p for p in products if p["rating_history"] and p["rating_history"][-1]["rating"] < 4.3]
+    if below_threshold:
+        names = ", ".join(product_name(p, short=True) for p in below_threshold)
+        stake = f" Products below 4.3 ({names}) are rated lower than most competitors — fewer customers will choose them over alternatives."
+    else:
+        stake = " All products above 4.3 — customers generally trust these ratings, which helps maintain sales."
+    return "; ".join(summaries) + "." + stake
+
+
+def _analyze_review_count(products):
+    """Generate AI analysis for a review count chart."""
+    summaries = []
+    total_purges = 0
+    for p in products:
+        ch = p["review_count_history"]
+        if len(ch) < 2:
+            continue
+        name = product_name(p, short=True)
+        first_c, last_c = ch[0]["count"], ch[-1]["count"]
+        months = max(1, (datetime.fromisoformat(ch[-1]["date"]) - datetime.fromisoformat(ch[0]["date"])).days / 30.44)
+        rate = (last_c - first_c) / months
+        drops = sum(1 for i in range(1, len(ch)) if ch[i]["count"] - ch[i-1]["count"] < -5)
+        total_purges += drops
+        drop_note = f", {drops} purge(s)" if drops else ""
+        summaries.append(f"{name}: {last_c:,} reviews at ~{rate:.0f}/mo{drop_note}")
+    if not summaries:
+        return None
+    if total_purges > 0:
+        stake = f" Amazon purged reviews {total_purges} time(s) across the portfolio — each purge permanently removes reviews, making the listing less convincing to new shoppers."
+    else:
+        stake = " Zero Amazon purges detected — the review base is intact, which helps convince new customers to buy."
+    return "; ".join(summaries) + "." + stake
+
+
+def _analyze_velocity(velocity_values):
+    """Generate AI analysis for a review velocity bar chart."""
+    if not velocity_values:
+        return None
+    positive = [v for v in velocity_values if v > 0]
+    negative = [v for v in velocity_values if v < 0]
+    avg_pos = sum(positive) / len(positive) if positive else 0
+    recent = velocity_values[-6:] if len(velocity_values) > 6 else velocity_values
+    earlier = velocity_values[:-6] if len(velocity_values) > 6 else []
+    avg_recent = sum(recent) / len(recent) if recent else 0
+    avg_earlier = sum(earlier) / len(earlier) if earlier else avg_recent
+
+    trend = "accelerating" if avg_recent > avg_earlier * 1.2 else "decelerating" if avg_recent < avg_earlier * 0.8 else "steady"
+    purge_note = f" {len(negative)} months had net review removals by Amazon." if negative else ""
+    if trend == "decelerating":
+        stake = f" At {avg_recent:.0f}/mo (down from {avg_earlier:.0f}/mo), fewer new reviews are coming in — this usually means fewer people are buying the product."
+    elif trend == "accelerating":
+        stake = f" At {avg_recent:.0f}/mo (up from {avg_earlier:.0f}/mo), more new reviews are coming in — this usually means more people are buying the product."
+    else:
+        stake = f" Steady at ~{avg_pos:.0f}/mo — the product is getting new reviews at a consistent rate."
+    return f"The rate of new reviews is {trend}.{purge_note}{stake}"
+
+
+def _analyze_price(product):
+    """Generate AI analysis for a price history chart."""
+    ph = product.get("marketplace_price_history", [])
+    if not ph or len(ph) < 2:
+        return None
+    prices = [pt["price"] for pt in ph]
+    first_p, last_p = prices[0], prices[-1]
+    min_p, max_p = min(prices), max(prices)
+    pct_change = (last_p - first_p) / first_p * 100 if first_p > 0 else 0
+    volatility = (max_p - min_p) / min_p * 100 if min_p > 0 else 0
+
+    if abs(pct_change) < 5:
+        trend = f"Price stable at \\${last_p:.2f}"
+    elif pct_change > 0:
+        trend = f"Price up {pct_change:.0f}% from \\${first_p:.2f} to \\${last_p:.2f}"
+    else:
+        trend = f"Price down {abs(pct_change):.0f}% from \\${first_p:.2f} to \\${last_p:.2f}"
+
+    if volatility > 50:
+        stake = f" Range of \\${min_p:.2f}–\\${max_p:.2f} ({volatility:.0f}% spread) — the price has moved a lot, so past margins may not be a good guide for future margins."
+    elif volatility > 20:
+        stake = f" Range of \\${min_p:.2f}–\\${max_p:.2f} — some price variation, which means margins have shifted depending on the period."
+    else:
+        stake = f" Tight range of \\${min_p:.2f}–\\${max_p:.2f} — stable pricing, so margins should be predictable."
+    return f"{trend}.{stake}"
+
+
+def _analyze_sales_rank(products):
+    """Generate AI analysis for a sales rank chart."""
+    summaries = []
+    for p in products:
+        rank_data = p.get("monthly_avg_rank", {})
+        if len(rank_data) < 2:
+            continue
+        name = product_name(p, short=True)
+        months = sorted(rank_data.keys())
+        recent_rank = rank_data[months[-1]]
+        recent_month = months[-1]
+        if recent_rank < 1000:
+            tier = "top 1,000"
+        elif recent_rank < 10000:
+            tier = f"rank ~{recent_rank:,.0f} (top 10K)"
+        elif recent_rank < 50000:
+            tier = f"rank ~{recent_rank:,.0f} (top 50K)"
+        else:
+            tier = f"rank ~{recent_rank:,.0f}"
+        # Show change over 1yr if available, else full range
+        latest_dt = datetime.strptime(months[-1], "%Y-%m")
+        cutoff_1yr = (latest_dt - timedelta(days=365)).strftime("%Y-%m")
+        past_months_1yr = [mo for mo in months if mo <= cutoff_1yr]
+        if past_months_1yr:
+            ref_month = past_months_1yr[-1]
+            ref_rank = rank_data[ref_month]
+            pct = (recent_rank - ref_rank) / ref_rank * 100 if ref_rank > 0 else 0
+            change_text = f"{pct:+.0f}% vs 1yr ago (~{ref_rank:,.0f} in {ref_month})"
+        else:
+            ref_month = months[0]
+            ref_rank = rank_data[ref_month]
+            pct = (recent_rank - ref_rank) / ref_rank * 100 if ref_rank > 0 else 0
+            change_text = f"{pct:+.0f}% vs {ref_month} (~{ref_rank:,.0f})"
+        summaries.append(f"{name}: {tier} as of {recent_month}, {change_text}")
+    if not summaries:
+        return None
+    worsening = [s for s in summaries if "+%" in s or "worsening" in s.lower()]
+    if any("+" in s.split("vs")[0] for s in summaries if "vs" in s):
+        stake = " Higher rank number = fewer daily sales compared to other products in the same category."
+    else:
+        stake = " Lower rank number = more daily sales compared to others in the category."
+    return "; ".join(summaries) + "." + stake
+
+
+def _analyze_combined_rating(products):
+    """Generate AI analysis for combined weighted rating chart."""
+    if not products:
+        return None
+    total_w, weighted_sum = 0, 0
+    for p in products:
+        if p["rating_history"] and p["review_count_history"]:
+            r = p["rating_history"][-1]["rating"]
+            w = p["review_count_history"][-1]["count"]
+            weighted_sum += r * w
+            total_w += w
+    if total_w == 0:
+        return None
+    avg = weighted_sum / total_w
+    if avg >= 4.3:
+        stake = f"At {avg:.2f}, the portfolio's average rating is strong — customers generally trust products rated above 4.3, which helps maintain steady sales."
+    else:
+        stake = f"At {avg:.2f}, the portfolio's average rating is below 4.3 — lower ratings make it harder to compete because customers tend to pick higher-rated alternatives."
+    return stake
+
+
+def _analyze_combined_reviews(products):
+    """Generate AI analysis for combined review count chart."""
+    total = sum(
+        p["review_count_history"][-1]["count"] for p in products if p["review_count_history"]
+    )
+    n = sum(1 for p in products if p["review_count_history"])
+    concentration = max(
+        (p["review_count_history"][-1]["count"] / total * 100) for p in products if p["review_count_history"]
+    ) if total > 0 else 0
+    top_product = max(products, key=lambda p: p["review_count_history"][-1]["count"] if p["review_count_history"] else 0)
+    top_name = product_name(top_product, short=True)
+    stake = f"{total:,} total reviews across {n} products. {top_name} holds {concentration:.0f}% of all reviews — "
+    if concentration > 70:
+        stake += "the business depends heavily on this one product. If anything happens to it, the majority of the portfolio's reviews are at risk."
+    elif concentration > 50:
+        stake += "the portfolio has moderate concentration risk in one product."
+    else:
+        stake += "reviews are spread across products, reducing dependence on any single one."
+    return stake
+
+
+def _compute_price_insight(product):
+    """Analyze price vs review velocity and price vs rating. Return insight text only if meaningful."""
+    ph = product.get("marketplace_price_history", [])
+    ch = product.get("review_count_history", [])
+    rh = product.get("rating_history", [])
+    if not ph:
+        return None
+
+    prices_all = [pt["price"] for pt in ph]
+    price_min, price_max = min(prices_all), max(prices_all)
+
+    # Monthly price
+    price_by_month = {}
+    for pt in ph:
+        price_by_month.setdefault(pt["date"][:7], []).append(pt["price"])
+    monthly_price = {m: sum(v) / len(v) for m, v in price_by_month.items()}
+
+    findings = []
+
+    # Price vs velocity (need 10+ months for reliability)
+    if len(ch) >= 4:
+        count_by_month = {}
+        for c in ch:
+            count_by_month[c["date"][:7]] = c["count"]
+        ms = sorted(count_by_month.keys())
+        vel_by_month = {}
+        for i in range(1, len(ms)):
+            vel_by_month[ms[i]] = max(0, count_by_month[ms[i]] - count_by_month[ms[i - 1]])
+        common = sorted(set(monthly_price) & set(vel_by_month))
+        if len(common) >= 10:
+            pr = np.array([monthly_price[m] for m in common])
+            ve = np.array([vel_by_month[m] for m in common])
+            if pr.std() > 0 and ve.std() > 0:
+                corr = float(np.corrcoef(pr, ve)[0, 1])
+                if abs(corr) >= 0.4:
+                    if corr > 0:
+                        findings.append(f"Price increases correlate with more new reviews per month (r={corr:.2f} over {len(common)} months) — price increases didn't hurt sales. The product held up well at higher prices.")
+                    else:
+                        findings.append(f"Price increases correlate with fewer new reviews per month (r={corr:.2f} over {len(common)} months) — customers buy less when the price goes up. Higher margins from price increases are offset by fewer sales.")
+
+    # Price vs rating (need 8+ months)
+    if len(rh) >= 4:
+        rating_by_month = {}
+        for r in rh:
+            rating_by_month.setdefault(r["date"][:7], []).append(r["rating"])
+        monthly_rating = {m: sum(v) / len(v) for m, v in rating_by_month.items()}
+        common = sorted(set(monthly_price) & set(monthly_rating))
+        if len(common) >= 8:
+            pr = np.array([monthly_price[m] for m in common])
+            ra = np.array([monthly_rating[m] for m in common])
+            if pr.std() > 0 and ra.std() > 0:
+                corr = float(np.corrcoef(pr, ra)[0, 1])
+                if abs(corr) >= 0.4:
+                    if corr < 0:
+                        findings.append(f"Higher prices correlate with lower ratings (r={corr:.2f} over {len(common)} months) — customers leave worse reviews when the price is higher, suggesting they expect more for the money.")
+                    else:
+                        findings.append(f"Higher prices correlate with higher ratings (r={corr:.2f} over {len(common)} months) — customers rate the product well even at higher prices, suggesting they see it as worth the cost.")
+
+    # Always show the price range context
+    header = f"**Pricing analysis** — Price ranged from \\${price_min:.2f} to \\${price_max:.2f} over {len(ph)} data points."
+
+    if findings:
+        return header + "\n\n" + "\n\n".join(findings)
+    else:
+        return header + " No significant relationship found between price changes and new reviews or ratings — price changes within this range haven't noticeably affected customer behavior, giving the operator flexibility to adjust prices."
+
+
+
+def detect_price_spikes(ph, threshold=0.20):
+    """Detect significant price changes (>threshold fraction) between consecutive data points."""
+    spikes = []
+    for i in range(1, len(ph)):
+        prev_price = ph[i - 1]["price"]
+        curr_price = ph[i]["price"]
+        if prev_price > 0:
+            pct_change = (curr_price - prev_price) / prev_price
+            if abs(pct_change) >= threshold:
+                spikes.append({
+                    "date": ph[i]["date"],
+                    "price": curr_price,
+                    "prev_price": prev_price,
+                    "pct_change": pct_change,
+                    "direction": "increase" if pct_change > 0 else "decrease",
+                })
+    return spikes
+
+
+def make_sales_rank_chart(products, title, zoomed=False):
+    fig = go.Figure()
+    all_ranks = []
     for i, p in enumerate(products):
         rank_data = p.get("monthly_avg_rank", {})
         if not rank_data or len(rank_data) < 2:
@@ -498,27 +1233,52 @@ def make_sales_rank_chart(products, title):
         months = sorted(rank_data.keys())
         dates = [datetime.strptime(m, "%Y-%m") for m in months]
         ranks = [rank_data[m] for m in months]
+        all_ranks.extend(ranks)
         fig.add_trace(go.Scatter(
             x=dates, y=ranks, mode="lines",
             name=product_name(p, short=True),
             line=dict(width=1.8, color=PRODUCT_COLORS[i % len(PRODUCT_COLORS)]),
         ))
 
-    # Add reference bands for sales rank context
-    rank_bands = [
-        (0, 1_000, "Top seller", "rgba(0,212,170,0.12)"),
-        (1_000, 10_000, "Strong seller", "rgba(56,182,255,0.10)"),
-        (10_000, 50_000, "Moderate seller", "rgba(255,217,61,0.08)"),
-        (50_000, 200_000, "Low volume", "rgba(255,107,107,0.08)"),
-        (200_000, 1_000_000, "Very low volume / niche", "rgba(192,132,252,0.08)"),
-    ]
-    for y0, y1, label, color in rank_bands:
-        fig.add_hrect(y0=y0, y1=y1, fillcolor=color, line_width=0)
+    if zoomed and all_ranks:
+        # Auto-scale to data range with 10% padding
+        data_min, data_max = min(all_ranks), max(all_ranks)
+        padding = max((data_max - data_min) * 0.1, 100)
+        y_lo = max(0, data_min - padding)
+        y_hi = data_max + padding
+        # Only add bands that overlap with the visible range
+        rank_bands = [
+            (0, 1_000, "#1–1K", "rgba(0,212,170,0.12)"),
+            (1_000, 10_000, "#1K–10K", "rgba(56,182,255,0.10)"),
+            (10_000, 50_000, "#10K–50K", "rgba(255,217,61,0.08)"),
+            (50_000, 200_000, "#50K–200K", "rgba(255,107,107,0.08)"),
+            (200_000, 1_000_000, "#200K–1M", "rgba(192,132,252,0.08)"),
+        ]
+        for band_y0, band_y1, label, color in rank_bands:
+            if band_y1 > y_lo and band_y0 < y_hi:
+                fig.add_hrect(y0=max(band_y0, y_lo), y1=min(band_y1, y_hi), fillcolor=color, line_width=0,
+                              annotation_text=label, annotation_position="top left",
+                              annotation=dict(font_size=10, font_color="rgba(255,255,255,0.5)"))
+        yaxis_config = dict(range=[y_hi, y_lo])  # reversed: higher number at bottom
+        subtitle = "Zoomed in to show trends and fluctuations. Same data as above, scaled to the actual range."
+    else:
+        # Full-range view with all bands
+        rank_bands = [
+            (0, 1_000, "#1–1K", "rgba(0,212,170,0.12)"),
+            (1_000, 10_000, "#1K–10K", "rgba(56,182,255,0.10)"),
+            (10_000, 50_000, "#10K–50K", "rgba(255,217,61,0.08)"),
+            (50_000, 200_000, "#50K–200K", "rgba(255,107,107,0.08)"),
+            (200_000, 1_000_000, "#200K–1M", "rgba(192,132,252,0.08)"),
+        ]
+        for y0, y1, label, color in rank_bands:
+            fig.add_hrect(y0=y0, y1=y1, fillcolor=color, line_width=0)
+        yaxis_config = dict(autorange="reversed")
+        subtitle = "Sales rank shows how this product's sales compare to every other product in the same Amazon category.<br>Rank #1 sells the most. Rank 100,000 means 99,999 products sell more."
 
     fig.update_layout(
-        title=dict(text=f"{title}<br><sup>Lower rank = more sales. Rank #1 is the best-selling product in the category.</sup>"),
-        yaxis_title="Amazon Sales Rank",
-        yaxis=dict(autorange="reversed"),
+        title=dict(text=f"{title}<br><sup>{subtitle}</sup>"),
+        yaxis_title="Sales Rank (lower = more sales)",
+        yaxis=yaxis_config,
         height=450,
         legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5, font=dict(size=10)),
         margin=dict(l=60, r=20, t=60, b=80),
@@ -604,7 +1364,7 @@ def page_executive_summary(biz_data):
             st.markdown(
                 f"Data covers {m['main_first_date']} to {m['main_last_date']} (main product). "
                 f"Review growth is {m['main_growth_per_mo']:.1f} reviews/mo — "
-                f"{'this is strong velocity for the category.' if m['main_growth_per_mo'] > 30 else 'moderate velocity.'}"
+                f"{'this is a high rate of new reviews for the category.' if m['main_growth_per_mo'] > 30 else 'a moderate rate of new reviews.'}"
             )
             if not flagged:
                 st.markdown(f"No manipulation signals detected across {len(integrity)} products. Review growth looks organic.")
@@ -633,12 +1393,45 @@ def page_business_analysis(biz_data, biz_name):
     st.caption("Filtered by selected date range")
 
     # KPI row
-    cols = st.columns(5)
+    cols = st.columns(6)
     cols[0].metric("Products", f"{metrics['n_products']} ({metrics['n_variations']} var)")
     cols[1].metric("Total Reviews", f"{metrics['total_reviews']:,}")
     cols[2].metric("Avg Rating", f"{metrics['weighted_avg_rating']:.1f}" if metrics["weighted_avg_rating"] else "?")
     cols[3].metric("Review Growth (reviews/mo)", f"{metrics['main_growth_per_mo']:.1f}")
     cols[4].metric("Rating Trend", metrics["main_r_dir"])
+    if metrics["main_rank_recent"] is not None:
+        current_rank = metrics["main_rank_recent"]
+
+        # Show 1yr change as delta if available, else 6mo
+        rank_periods = metrics["main_rank_periods"]
+        rank_delta_text = None
+        compare_period = None
+        for period_key in ["1yr", "6mo", "2yr"]:
+            if period_key in rank_periods:
+                p = rank_periods[period_key]
+                pct = p["pct_change"]
+                compare_period = period_key
+                rank_delta_text = f"{pct:+.0f}% vs {period_key} ago (was #{p['from_rank']:,.0f})"
+                rank_delta_color = "inverse"  # inverse: negative shown green, positive shown red
+                break
+        if rank_delta_text:
+            cols[5].metric("Main Product Sales Rank", f"#{current_rank:,.0f}", delta=rank_delta_text, delta_color=rank_delta_color)
+        else:
+            cols[5].metric("Main Product Sales Rank", f"#{current_rank:,.0f}")
+        # Factual explanation: what the number means and direction
+        explanation = f"#{current_rank:,.0f} means {current_rank - 1:,.0f} products in this category sell more."
+        if rank_delta_text and compare_period:
+            p = rank_periods[compare_period]
+            from_rank = p["from_rank"]
+            if p["pct_change"] > 20:
+                explanation += f" Was #{from_rank:,.0f} {compare_period} ago — rank number went up, meaning fewer sales now."
+            elif p["pct_change"] < -20:
+                explanation += f" Was #{from_rank:,.0f} {compare_period} ago — rank number went down, meaning more sales now."
+            else:
+                explanation += f" Was #{from_rank:,.0f} {compare_period} ago — roughly the same sales level."
+        cols[5].caption(explanation)
+    else:
+        cols[5].metric("Main Product Sales Rank", "No data")
 
     st.divider()
 
@@ -656,6 +1449,7 @@ def page_business_analysis(biz_data, biz_name):
 - **Avg Rating** — weighted average rating across all products, weighted by review count (so a product with 7,000 reviews matters more than one with 100).
 - **Review Growth** — how many new reviews the main product gains per month on average over the selected period. Higher = more customers buying.
 - **Rating Trend** — compares the average rating in the first half vs second half of the selected period. STABLE means quality hasn't changed; DECLINING means recent ratings are lower.
+- **Main Product Sales Rank** — where the main product ranks in sales compared to every other product in the same Amazon category. Lower number = more sales. For example, rank 3,000 means only 2,999 products sell more in that category.
 
 **Review Integrity Assessment**
 """)
@@ -709,6 +1503,9 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
             colors=["#00d4aa"],
         )
         st.plotly_chart(fig, use_container_width=True)
+        analysis = _analyze_rating([main])
+        if analysis:
+            _ai_caption(analysis)
 
         fig = make_review_count_chart(
             [main],
@@ -716,6 +1513,49 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
             colors=["#00d4aa"],
         )
         st.plotly_chart(fig, use_container_width=True)
+        analysis = _analyze_review_count([main])
+        if analysis:
+            _ai_caption(analysis)
+
+        # Price history chart
+        if main.get("marketplace_price_history"):
+            fig = make_price_chart(
+                [main],
+                f"Price History — {product_name(main, short=True)}",
+                colors=["#00d4aa"],
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            analysis = _analyze_price(main)
+            if analysis:
+                _ai_caption(analysis)
+
+            # Price correlation analysis
+            col_pv, col_pr = st.columns(2)
+            with col_pv:
+                fig_pv = _make_price_vs_velocity_chart(
+                    main, f"Price vs Review Velocity")
+                if fig_pv:
+                    st.plotly_chart(fig_pv, use_container_width=True)
+            with col_pr:
+                fig_pr = _make_price_vs_rating_chart(
+                    main, f"Price vs Rating")
+                if fig_pr:
+                    st.plotly_chart(fig_pr, use_container_width=True)
+
+            # Scatter plots with regression
+            fig_sc_rating, fig_sc_velocity = _make_price_scatter(main)
+            if fig_sc_rating or fig_sc_velocity:
+                col_sr, col_sv = st.columns(2)
+                if fig_sc_rating:
+                    with col_sr:
+                        st.plotly_chart(fig_sc_rating, use_container_width=True)
+                if fig_sc_velocity:
+                    with col_sv:
+                        st.plotly_chart(fig_sc_velocity, use_container_width=True)
+
+            price_insight = _compute_price_insight(main)
+            if price_insight:
+                st.info(price_insight)
 
         # Reviews per month velocity chart
         if len(main_ch) >= 4:
@@ -749,6 +1589,22 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
                 margin=dict(l=60, r=20, t=70, b=40),
             )
             st.plotly_chart(fig_vel, use_container_width=True)
+            analysis = _analyze_velocity(velocity_values)
+            if analysis:
+                _ai_caption(analysis)
+
+        # Sales rank chart for main product
+        rank_data = main.get("monthly_avg_rank", {})
+        if rank_data and len(rank_data) >= 2:
+            fig_rank = make_sales_rank_chart([main], f"Sales Rank — {product_name(main, short=True)}")
+            st.plotly_chart(fig_rank, use_container_width=True)
+            fig_rank_zoom = make_sales_rank_chart([main], f"Sales Rank (Zoomed In) — {product_name(main, short=True)}", zoomed=True)
+            st.plotly_chart(fig_rank_zoom, use_container_width=True)
+            analysis = _analyze_sales_rank([main])
+            if analysis:
+                _ai_caption(analysis)
+
+        render_notable_events([main], product_name(main, short=True))
 
     # ─── 2. All Products Combined ───
     with tab2:
@@ -759,12 +1615,20 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
             f"{biz_name} — Weighted Avg Rating (All Products Combined)",
         )
         st.plotly_chart(fig, use_container_width=True)
+        analysis = _analyze_combined_rating(products)
+        if analysis:
+            _ai_caption(analysis)
 
         fig = make_combined_chart(
             products, "reviews",
             f"{biz_name} — Total Reviews (All Products Combined)",
         )
         st.plotly_chart(fig, use_container_width=True)
+        analysis = _analyze_combined_reviews(products)
+        if analysis:
+            _ai_caption(analysis)
+
+        render_notable_events(products, "Portfolio")
 
     # ─── 3. All Individual Products ───
     with tab3:
@@ -772,14 +1636,47 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
 
         fig = make_rating_chart(products, f"{biz_name} — Rating History (All Products)")
         st.plotly_chart(fig, use_container_width=True)
+        analysis = _analyze_rating(products)
+        if analysis:
+            _ai_caption(analysis)
 
         fig = make_review_count_chart(products, f"{biz_name} — Review Count Growth (All Products)")
         st.plotly_chart(fig, use_container_width=True)
+        analysis = _analyze_review_count(products)
+        if analysis:
+            _ai_caption(analysis)
 
         # Sales rank
         fig = make_sales_rank_chart(products, f"{biz_name} — Monthly Avg Sales Rank")
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("Sales rank shows relative sales position within the product's Amazon category. A rank of 1,000 means it outsells ~99.9% of products in that category. Chart bands: green < 1K (top seller), blue 1K\u201310K (strong), yellow 10K\u201350K (moderate), red 50K\u2013200K (low volume), purple > 200K (niche).")
+        fig_zoom = make_sales_rank_chart(products, f"{biz_name} — Monthly Avg Sales Rank (Zoomed In)", zoomed=True)
+        st.plotly_chart(fig_zoom, use_container_width=True)
+        analysis = _analyze_sales_rank(products)
+        if analysis:
+            _ai_caption(analysis)
+
+        # Price history
+        products_with_price = [p for p in products if p.get("marketplace_price_history")]
+        if products_with_price:
+            fig = make_price_chart(products_with_price, f"{biz_name} — Price History (All Products)")
+            st.plotly_chart(fig, use_container_width=True)
+            # AI analysis for portfolio price
+            price_ranges = []
+            for pp in products_with_price:
+                pph = pp.get("marketplace_price_history", [])
+                if pph:
+                    price_ranges.append((product_name(pp, short=True), pph[-1]["price"]))
+            if price_ranges:
+                prices_sorted = sorted(price_ranges, key=lambda x: -x[1])
+                highest = prices_sorted[0]
+                lowest = prices_sorted[-1]
+                st.caption(
+                    f"*AI analysis (Claude):* Across the {biz_name} portfolio, "
+                    f"prices range from \\${lowest[1]:.2f} ({lowest[0]}) to \\${highest[1]:.2f} ({highest[0]}). "
+                    f"{'Wide price spread means the products serve different customer segments — each price level faces different competitors.' if highest[1] / max(lowest[1], 0.01) > 2 else 'Products are priced in a similar range, meaning they compete in the same part of the market.'}"
+                )
+
+        render_notable_events(products, "All Products")
 
     # ─── Product Breakdown Table ───
     with tab4:
@@ -810,12 +1707,17 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
             else:
                 trend = "?"
 
+            # Latest marketplace price
+            mph = p.get("marketplace_price_history", [])
+            price_str = f"${mph[-1]['price']:.2f}" if mph else "?"
+
             rows.append({
                 "ASIN": p["representative_asin"],
                 "Product": product_name(p, short=True),
                 "Amazon": amazon_link(p["representative_asin"]),
                 "Keepa": keepa_link(p["representative_asin"]),
                 "Rating": rating,
+                "Price": price_str,
                 "Reviews": f"{p['shared_reviews']:,}",
                 "Variants": p["num_variations"],
                 "Reviews/mo": growth_str,
@@ -888,24 +1790,122 @@ def page_evaluation(biz_data, biz_name):
             "Listing: [Empire Flippers #92221](https://app.empireflippers.com/listing/unlocked/92221)"
         )
 
+    # Helper: build rank bullet points with specific time windows
+    def _rank_bullets(metrics):
+        """Return (pros_list, cons_list) for sales rank with time-specific data."""
+        pros, cons = [], []
+        periods = metrics.get("main_rank_periods", {})
+        current = metrics.get("main_rank_recent")
+        if current is None or not periods:
+            return pros, cons
+        for label in ["6mo", "1yr", "2yr"]:
+            if label not in periods:
+                continue
+            p = periods[label]
+            pct = p["pct_change"]
+            if abs(pct) < 20:
+                direction = "stable"
+            elif pct < 0:
+                direction = "improved"
+            else:
+                direction = "worsened"
+            text = (
+                f"Main product sales rank {direction}: ~{p['from_rank']:,.0f} → ~{p['to_rank']:,.0f} "
+                f"({pct:+.0f}%) over the last {label} ({p['from_month']} to {metrics['main_rank_recent_month']})"
+            )
+            if direction == "improved":
+                pros.append(text)
+            elif direction == "worsened":
+                cons.append(text)
+            # stable: not notable enough for pro/con
+        return pros, cons
+
+    def _rank_summary_note(metrics):
+        """Return a factual rank summary sentence for the AI assessment."""
+        periods = metrics.get("main_rank_periods", {})
+        current = metrics.get("main_rank_recent")
+        if current is None:
+            return ""
+        parts = []
+        for label in ["1yr", "6mo"]:
+            if label in periods:
+                p = periods[label]
+                pct = p["pct_change"]
+                parts.append(f"{pct:+.0f}% vs {label} ago (was ~{p['from_rank']:,.0f})")
+        rank_context = "; ".join(parts) if parts else "no prior data to compare"
+        return (
+            f" Sales rank is currently #{current:,.0f} ({rank_context}). "
+            f"This means {current - 1:,.0f} products in the category sell more."
+        )
+
+    def _rating_trend_bullets(metrics):
+        """Return (pros, cons) for rating changes over time windows."""
+        pros, cons = [], []
+        for label in ["1yr", "6mo"]:
+            if label not in metrics.get("rating_periods", {}):
+                continue
+            rp = metrics["rating_periods"][label]
+            delta = rp["delta"]
+            if abs(delta) < 0.05:
+                continue  # not notable
+            text = f"Rating {rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({delta:+.2f}) over last {label} ({rp['from_month']} to now)"
+            if delta > 0.1:
+                pros.append(text)
+            elif delta < -0.1:
+                cons.append(text)
+        return pros, cons
+
+    def _review_trend_bullets(metrics):
+        """Return (pros, cons) for review growth changes over time windows."""
+        pros, cons = [], []
+        periods = metrics.get("review_periods", {})
+        # Compare 1yr rate vs 2yr rate to detect acceleration/deceleration
+        if "1yr" in periods and "2yr" in periods:
+            recent_rate = periods["1yr"]["per_month"]
+            longer_rate = periods["2yr"]["per_month"]
+            if recent_rate < longer_rate * 0.7:
+                cons.append(
+                    f"Review growth slowing: {recent_rate:.0f} reviews/mo over last 1yr vs {longer_rate:.0f}/mo over last 2yr — fewer new customers"
+                )
+            elif recent_rate > longer_rate * 1.3:
+                pros.append(
+                    f"Review growth accelerating: {recent_rate:.0f} reviews/mo over last 1yr vs {longer_rate:.0f}/mo over last 2yr — more new customers"
+                )
+        # Show 6mo rate if notably different from 1yr
+        if "6mo" in periods and "1yr" in periods:
+            rate_6mo = periods["6mo"]["per_month"]
+            rate_1yr = periods["1yr"]["per_month"]
+            if rate_6mo < rate_1yr * 0.7:
+                cons.append(
+                    f"Recent slowdown: {rate_6mo:.0f} reviews/mo over last 6mo vs {rate_1yr:.0f}/mo over last 1yr"
+                )
+            elif rate_6mo > rate_1yr * 1.3:
+                pros.append(
+                    f"Recent acceleration: {rate_6mo:.0f} reviews/mo over last 6mo vs {rate_1yr:.0f}/mo over last 1yr"
+                )
+        return pros, cons
+
     if biz_name == "Wallaroo Wallets":
         verdict = "CAUTIOUSLY POSITIVE"
         verdict_emoji = "🟢"
+        rank_pros, rank_cons = _rank_bullets(m)
+        rating_pros, rating_cons = _rating_trend_bullets(m)
+        review_pros, review_cons = _review_trend_bullets(m)
         pros = [
             f"10-year brand, 4.6 stars across {m['main_reviews']:,} reviews — exceptional longevity",
             f"Rating STABLE at 4.4-4.6 over full history — no quality degradation",
             f"Main product growing at {m['main_growth_per_mo']:.0f} new reviews/month consistently",
             f"{m['n_variations']} color variants from just {m['n_products']} products = efficient SKU strategy",
             "Ultra-low unit cost ($1.65-1.81) = massive tariff buffer",
-            "Category leader in phone wallets — strong organic search positioning",
-        ]
+            "Category leader in phone wallets — well-established with strong sales history",
+        ] + rank_pros + rating_pros + review_pros
         cons = [
             f"Only {m['n_products']} unique products — high concentration in Phone Wallet ({m['main_reviews']:,}/{m['total_reviews']:,} reviews)",
             "MagSafe & Wristlet trending DOWN (4.5->4.1, 4.7->4.2) — newer products struggling",
             "No P&L data (Flippa listing) — cannot verify financial claims",
             "Competitive market: phone wallets have low barriers to entry",
             f"Card Holder & Wristlet have low volume ({159+114} reviews combined) — limited traction",
-        ]
+        ] + rank_cons + rating_cons + review_cons
         questions = [
             "What are the actual revenue and profit numbers? Need P&L or bank statements",
             "Why are newer products (MagSafe, Wristlet) rated lower? Quality or expectations issue?",
@@ -913,32 +1913,48 @@ def page_evaluation(biz_data, biz_name):
             "What % of revenue comes from the main Phone Wallet vs other products?",
             "Is there a supplier dependency risk? Backup manufacturers?",
         ]
+        rank_note = _rank_summary_note(m)
         summary = (
             f"The main Phone Wallet has a rock-solid 4.6 rating across {m['main_reviews']:,} reviews with stable "
             f"trends — a 10-year track record of consistent quality. However, the business is essentially a "
             f"one-product company — the Phone Wallet accounts for {m['main_reviews']/m['total_reviews']*100:.0f}% "
-            f"of all reviews. Newer products (MagSafe at 4.2, Wristlet at 4.2) show declining ratings. The core "
-            f"product is strong but diversification is weak. CRITICAL: No P&L available — cannot make a financial "
-            f"assessment. Proceed only with verified financials."
+            f"of all reviews. Newer products (MagSafe at 4.2, Wristlet at 4.2) show declining ratings.{rank_note} "
+            f"The core product is strong but diversification is weak. CRITICAL: No P&L available — cannot make a "
+            f"financial assessment. Proceed only with verified financials."
         )
     else:
         verdict = "MIXED — STRONG CORE, WEAK TAILS"
         verdict_emoji = "🟡"
+        rank_pros, rank_cons = _rank_bullets(m)
+        rating_pros, rating_cons = _rating_trend_bullets(m)
+        review_pros, review_cons = _review_trend_bullets(m)
+        # Check for products with badly worsening rank (with time context)
+        rank_cons_extra = []
+        for p in products[1:]:
+            p_rank = p.get("monthly_avg_rank", {})
+            if p_rank and len(p_rank) >= 2:
+                p_months = sorted(p_rank.keys())
+                p_early, p_recent = p_rank[p_months[0]], p_rank[p_months[-1]]
+                if p_recent > p_early * 3 and p_recent > 100_000:
+                    rank_cons_extra.append(
+                        f"{product_name(p, short=True)} sales rank went from ~{p_early:,.0f} to ~{p_recent:,.0f} "
+                        f"({p_months[0]} to {p_months[-1]}) — barely selling"
+                    )
         pros = [
             f"Core Sand Timer line at 4.4 stars with {products[0]['shared_reviews']:,} reviews — market leader",
             f"Toothbrush Timer at 4.6 stars ({products[1]['shared_reviews']:,} reviews) — STRONGER than initially reported",
-            f"16 color variants of main timer = strong shelf presence and color choice moat",
+            f"16 color variants of main timer = wide selection that's hard for new competitors to match",
             "P&L verified: $46K/mo revenue, 10% margin via Empire Flippers",
-            f"Review growth at {m['main_growth_per_mo']:.0f} new reviews/month on main product — healthy velocity",
+            f"Review growth at {m['main_growth_per_mo']:.0f} new reviews/month on main product — steady stream of new buyers",
             "Two strong products (Sand Timer 4.4, Toothbrush Timer 4.6) — diversified within niche",
-        ]
+        ] + rank_pros + rating_pros + review_pros
         cons = [
             f"Rating trend slightly DOWN on main product ({m['main_early_r']:.1f} -> {m['main_recent_r']:.1f})",
             f"60-Minute Timer at 3.4 stars (16 reviews) — worst performing product",
             "10% margin is thin — vulnerable to cost increases or ad spend pressure",
             f"Review growth {m['growth_dir'].lower()} — early {m['early_growth_mo']:.0f} reviews/mo vs recent {m['recent_growth_mo']:.0f} reviews/mo",
             f"Dashboard: FAILS age (<5yr) and multiple (>30x). 2 FAIL criteria on acquisition checklist",
-        ]
+        ] + rank_cons + rank_cons_extra + rating_cons + review_cons
         questions = [
             "Can the 60-Minute Timer (3.4 stars) be discontinued or redesigned?",
             "Why is margin only 10% on $46K/mo revenue? Where are costs going?",
@@ -946,11 +1962,14 @@ def page_evaluation(biz_data, biz_name):
             "What is the defect/return rate for the Sand Timer line?",
             "Would seller accept $100K-120K (19-23x) given the 2 FAIL criteria?",
         ]
+        rank_note = _rank_summary_note(m)
+        if rank_cons_extra:
+            rank_note += f" {len(rank_cons_extra)} product(s) have seen their sales rank collapse, suggesting they are barely selling."
         summary = (
             f"The Toothbrush Timer at 4.6 stars is the strongest product in the portfolio. The core Sand Timer "
             f"line at 4.4 stars with {products[0]['shared_reviews']:,} reviews is solid. The only weak spot is the "
-            f"60-Minute Timer at 3.4 stars with just 16 reviews. Overall product quality is strong across the "
-            f"catalog. However, financial concerns remain: 10% margin is thin, and the listing fails 2 acquisition "
+            f"60-Minute Timer at 3.4 stars with just 16 reviews.{rank_note} Overall product quality is strong across the "
+            f"main catalog. However, financial concerns remain: 10% margin is thin, and the listing fails 2 acquisition "
             f"criteria (age <5yr, multiple >30x). Worth pursuing at a lower price."
         )
 
@@ -974,6 +1993,41 @@ def page_evaluation(biz_data, biz_name):
 
     st.markdown("#### AI Assessment")
     st.info(summary)
+
+    # Trends table: rating, reviews, sales rank over 6mo / 1yr / 2yr
+    st.divider()
+    st.markdown("#### Main Product Trends by Time Window")
+    st.caption(
+        "How the main product's key metrics changed over the last 6 months, 1 year, and 2 years. "
+        "Rating = star rating (out of 5). Reviews/mo = average new reviews added per month in that period. "
+        "Sales rank = position in category (lower = more sales; negative % change = rank improved)."
+    )
+    trend_rows = []
+    for label in ["6mo", "1yr", "2yr"]:
+        row = {"Period": f"Last {label}"}
+        # Rating
+        if label in m.get("rating_periods", {}):
+            rp = m["rating_periods"][label]
+            row["Rating"] = f"{rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({rp['delta']:+.2f})"
+        else:
+            row["Rating"] = "—"
+        # Reviews per month
+        if label in m.get("review_periods", {}):
+            rvp = m["review_periods"][label]
+            row["Reviews Added"] = f"{rvp['added']:,}"
+            row["Reviews/mo"] = f"{rvp['per_month']:.1f}"
+        else:
+            row["Reviews Added"] = "—"
+            row["Reviews/mo"] = "—"
+        # Sales rank
+        if label in m.get("main_rank_periods", {}):
+            srp = m["main_rank_periods"][label]
+            row["Sales Rank"] = f"#{srp['from_rank']:,.0f} → #{srp['to_rank']:,.0f} ({srp['pct_change']:+.0f}%)"
+        else:
+            row["Sales Rank"] = "—"
+        trend_rows.append(row)
+    if trend_rows:
+        st.dataframe(pd.DataFrame(trend_rows), use_container_width=True, hide_index=True)
 
     # Wallaroo seller-reported financials (no P&L available, only summary table)
     if biz_name == "Wallaroo Wallets":
@@ -1044,6 +2098,22 @@ def page_evaluation(biz_data, biz_name):
                 margin=dict(l=60, r=20, t=50, b=40),
             )
             st.plotly_chart(fig, use_container_width=True)
+            # AI analysis for revenue chart
+            rev_vals = [rev[m] for m in months_sorted]
+            net_vals = [net.get(m, 0) for m in months_sorted]
+            recent_rev = rev_vals[-3:] if len(rev_vals) >= 3 else rev_vals
+            avg_recent_rev = sum(recent_rev) / len(recent_rev) if recent_rev else 0
+            recent_net = net_vals[-3:] if len(net_vals) >= 3 else net_vals
+            avg_recent_net = sum(recent_net) / len(recent_net) if recent_net else 0
+            margin_pct = (avg_recent_net / avg_recent_rev * 100) if avg_recent_rev else 0
+            if rev_vals[-1] < rev_vals[0] * 0.8:
+                rev_decline = (1 - rev_vals[-1] / rev_vals[0]) * 100
+                rev_stake = f"Revenue declined {rev_decline:.0f}% over this period — at this rate, the business generates \\${rev_vals[-1]:,.0f}/mo, which directly reduces the earnings base used to calculate acquisition multiples."
+            else:
+                rev_stake = f"Revenue is stable or growing over this period, supporting the current earnings multiple."
+            _ai_caption(
+                f"Recent 3-month average: \\${avg_recent_rev:,.0f}/mo revenue, \\${avg_recent_net:,.0f}/mo net income ({margin_pct:.0f}% margin). {rev_stake}"
+            )
 
         # Margin chart
         margin = pnl.get("Net Profit Margin (12mo trailing)", {})
@@ -1073,6 +2143,16 @@ def page_evaluation(biz_data, biz_name):
                 margin=dict(l=60, r=20, t=50, b=40),
             )
             st.plotly_chart(fig, use_container_width=True)
+            # AI analysis for margin chart
+            margin_vals = [margin[m] for m in months_sorted]
+            latest_margin = margin_vals[-1]
+            tacos_latest = tacos.get(months_sorted[-1]) if tacos else None
+            tacos_note = f" TaCOS is {tacos_latest:.1f}% — every 1% increase in ad spend reduces net margin by ~1 percentage point at current revenue." if tacos_latest else ""
+            if latest_margin < 15:
+                margin_stake = f"Net profit margin is {latest_margin:.1f}%. A 10% tariff increase or \\$0.50/unit cost rise would eliminate {min(latest_margin, 5):.0f}+ percentage points of margin at current pricing."
+            else:
+                margin_stake = f"Net profit margin is {latest_margin:.1f}%. The business retains {latest_margin - 10:.0f} percentage points of buffer above a 10% minimum viable margin."
+            _ai_caption(f"{margin_stake}{tacos_note}")
 
         st.caption("Source: Empire Flippers verified P&L (Listing #92221)")
 
@@ -1250,6 +2330,16 @@ def page_yearly_breakdown(biz_data, biz_name):
                 showlegend=False,
             )
             st.plotly_chart(fig_r, use_container_width=True)
+            # AI analysis for yearly rating
+            valid_ratings = [r for r in chart_ratings if r is not None]
+            if len(valid_ratings) >= 2:
+                first_yr_r, last_yr_r = valid_ratings[0], valid_ratings[-1]
+                if abs(last_yr_r - first_yr_r) < 0.1:
+                    _ai_caption(f"Rating consistent at ~{last_yr_r:.1f} across years. Stable ratings help keep customers buying — shoppers are more likely to trust a product with a steady track record.")
+                elif last_yr_r > first_yr_r:
+                    _ai_caption(f"Rating improved from {first_yr_r:.2f} to {last_yr_r:.2f} year-over-year. Higher ratings mean more customers choose this product over competitors, which typically leads to more sales.")
+                else:
+                    _ai_caption(f"Rating declined from {first_yr_r:.2f} to {last_yr_r:.2f} year-over-year. Lower ratings mean fewer customers choose this product — especially below 4.0, where shoppers tend to look elsewhere.")
 
         # 2. Net Reviews Added by Year (bar chart)
         chart_reviews = []
@@ -1278,6 +2368,19 @@ def page_yearly_breakdown(biz_data, biz_name):
                 showlegend=False,
             )
             st.plotly_chart(fig_rev, use_container_width=True)
+            # AI analysis for yearly reviews
+            valid_reviews = [r for r in chart_reviews if r is not None]
+            if len(valid_reviews) >= 2:
+                peak_yr_idx = valid_reviews.index(max(valid_reviews))
+                peak_yr = chart_years[peak_yr_idx] if peak_yr_idx < len(chart_years) else "?"
+                latest_rev = valid_reviews[-1]
+                peak_rev = max(valid_reviews)
+                if latest_rev < peak_rev * 0.5:
+                    _ai_caption(f"Review acquisition peaked in {peak_yr} ({peak_rev:,} added) and has dropped to {latest_rev:,} — less than half the peak. Fewer new reviews usually means fewer sales, and competitors with more recent reviews will look more trustworthy to shoppers.")
+                elif latest_rev >= peak_rev * 0.8:
+                    _ai_caption(f"Review growth remains strong at {latest_rev:,}/year, near the peak of {peak_rev:,} in {peak_yr}. Consistent new reviews signal steady sales and help the listing stay trustworthy to new shoppers.")
+                else:
+                    _ai_caption(f"Review growth has slowed from a peak of {peak_rev:,} in {peak_yr} to {latest_rev:,} recently. Fewer new reviews makes it easier for competitors with faster review growth to look more trustworthy by comparison.")
 
         # Build carried-forward avg ratings for YoY comparison
         carried_avg_by_year = {}
