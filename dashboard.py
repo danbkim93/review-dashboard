@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 from datetime import datetime, date, timedelta
+from dateutil.relativedelta import relativedelta
 
 import openpyxl
 from openpyxl.utils import column_index_from_string
@@ -1290,7 +1291,7 @@ def make_sales_rank_chart(products, title, zoomed=False):
 
 def page_executive_summary(biz_data):
     st.header("Executive Summary")
-    st.caption("Based on Keepa API data | All products deduplicated by parent ASIN | Filtered by selected date range")
+    st.caption("Based on Keepa API data | All products deduplicated by parent ASIN")
 
     col1, col2 = st.columns(2)
 
@@ -1332,9 +1333,9 @@ def page_executive_summary(biz_data):
             short_title(w["main_title"], 50),
             f"{w['main_rating']:.1f}" if w["main_rating"] else "?",
             f"{w['main_reviews']:,}",
-            f"{w['main_r_dir']} ({w['main_early_r']:.1f} -> {w['main_recent_r']:.1f})",
+            f"{w['rating_periods']['1yr']['from_rating']:.1f} → {w['rating_periods']['1yr']['to_rating']:.1f} ({w['rating_periods']['1yr']['delta']:+.2f}, {w['rating_periods']['1yr']['from_month']} → now)" if '1yr' in w.get('rating_periods', {}) else f"{w['main_r_dir']} ({w['main_early_r']:.1f} -> {w['main_recent_r']:.1f})",
             f"{w['main_growth_per_mo']:.1f} reviews/mo",
-            f"{w['growth_dir']} (early {w['early_growth_mo']:.1f} -> recent {w['recent_growth_mo']:.1f} reviews/mo)",
+            f"{w['review_periods']['1yr']['per_month']:.1f}/mo (1yr) vs {w['review_periods']['2yr']['per_month']:.1f}/mo (2yr) — {'slowing' if w['review_periods']['1yr']['per_month'] < w['review_periods']['2yr']['per_month'] * 0.9 else 'accelerating' if w['review_periods']['1yr']['per_month'] > w['review_periods']['2yr']['per_month'] * 1.1 else 'steady'}" if '1yr' in w.get('review_periods', {}) and '2yr' in w.get('review_periods', {}) else f"{w['growth_dir']} (early {w['early_growth_mo']:.1f} -> recent {w['recent_growth_mo']:.1f} reviews/mo)",
             f"{w['main_first_date']} to {w['main_last_date']}",
             "Keepa API (complete)",
         ],
@@ -1345,14 +1346,270 @@ def page_executive_summary(biz_data):
             short_title(t["main_title"], 50),
             f"{t['main_rating']:.1f}" if t["main_rating"] else "?",
             f"{t['main_reviews']:,}",
-            f"{t['main_r_dir']} ({t['main_early_r']:.1f} -> {t['main_recent_r']:.1f})",
+            f"{t['rating_periods']['1yr']['from_rating']:.1f} → {t['rating_periods']['1yr']['to_rating']:.1f} ({t['rating_periods']['1yr']['delta']:+.2f}, {t['rating_periods']['1yr']['from_month']} → now)" if '1yr' in t.get('rating_periods', {}) else f"{t['main_r_dir']} ({t['main_early_r']:.1f} -> {t['main_recent_r']:.1f})",
             f"{t['main_growth_per_mo']:.1f} reviews/mo",
-            f"{t['growth_dir']} (early {t['early_growth_mo']:.1f} -> recent {t['recent_growth_mo']:.1f} reviews/mo)",
+            f"{t['review_periods']['1yr']['per_month']:.1f}/mo (1yr) vs {t['review_periods']['2yr']['per_month']:.1f}/mo (2yr) — {'slowing' if t['review_periods']['1yr']['per_month'] < t['review_periods']['2yr']['per_month'] * 0.9 else 'accelerating' if t['review_periods']['1yr']['per_month'] > t['review_periods']['2yr']['per_month'] * 1.1 else 'steady'}" if '1yr' in t.get('review_periods', {}) and '2yr' in t.get('review_periods', {}) else f"{t['growth_dir']} (early {t['early_growth_mo']:.1f} -> recent {t['recent_growth_mo']:.1f} reviews/mo)",
             f"{t['main_first_date']} to {t['main_last_date']}",
             "Keepa API (complete)",
         ],
     }
     st.dataframe(pd.DataFrame(table_data).set_index("Metric"), use_container_width=True)
+
+    # Recent Trends comparison table
+    st.divider()
+    st.markdown("#### Recent Trends (Main Product)")
+    st.caption("Rating, review growth, and sales rank for the main product over 6 months, 1 year, and 2 years. "
+               "Sales rank: lower number = more sales; negative % = rank improved.")
+    today = date.today()
+    period_months = {"6mo": 6, "1yr": 12, "2yr": 24}
+    trend_rows = []
+    for label in ["6mo", "1yr", "2yr"]:
+        start = today - relativedelta(months=period_months[label])
+        row = {"Period": f"Last {label} ({start.strftime('%Y-%m')} → {today.strftime('%Y-%m')})"}
+        for biz_name, prefix in [("Wallaroo Wallets", "Wallaroo"), ("TeacherFav", "TeacherFav")]:
+            bm = biz_data[biz_name]["metrics"]
+            # Rating
+            if label in bm.get("rating_periods", {}):
+                rp = bm["rating_periods"][label]
+                row[f"{prefix} Rating"] = f"{rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({rp['delta']:+.2f})"
+            else:
+                row[f"{prefix} Rating"] = "—"
+            # Reviews added + per month
+            if label in bm.get("review_periods", {}):
+                rvp = bm["review_periods"][label]
+                row[f"{prefix} Reviews"] = f"+{rvp['added']:,} ({rvp['per_month']:.1f}/mo)"
+            else:
+                row[f"{prefix} Reviews"] = "—"
+            # Sales Rank
+            if label in bm.get("main_rank_periods", {}):
+                srp = bm["main_rank_periods"][label]
+                row[f"{prefix} Sales Rank"] = f"#{srp['from_rank']:,.0f} → #{srp['to_rank']:,.0f} ({srp['pct_change']:+.0f}%)"
+            else:
+                row[f"{prefix} Sales Rank"] = "—"
+        trend_rows.append(row)
+    if trend_rows:
+        st.dataframe(pd.DataFrame(trend_rows), use_container_width=True, hide_index=True)
+
+    # Trend charts — highlighted line charts for each time window
+    st.markdown("#### Trend Charts (Main Product)")
+    st.caption("Full time-series with the recent window highlighted. "
+               "Annotations compare the recent window against the equivalent prior period.")
+
+    tc_col1, tc_col2 = st.columns(2)
+    with tc_col1:
+        biz_name = st.selectbox("Business", ["Wallaroo Wallets", "TeacherFav"], key="trend_biz_sel")
+    with tc_col2:
+        window_options_raw = {"6mo": 6, "1yr": 12, "2yr": 24}
+        window_display = []
+        for wlabel, wmonths in window_options_raw.items():
+            wstart = (today - relativedelta(months=wmonths)).strftime("%Y-%m")
+            wend = today.strftime("%Y-%m")
+            window_display.append(f"{wlabel} ({wstart} → {wend})")
+        window_sel = st.selectbox("Time Window", window_display, key="trend_window_sel")
+        window_label = window_sel.split(" (")[0]  # extract "6mo", "1yr", "2yr"
+    months = window_options_raw[window_label]
+    label = window_label
+
+    prods = biz_data[biz_name]["products"]
+    main = max(prods, key=lambda p: p.get("reviewCount", 0)) if prods else None
+    if not main:
+        st.info("No product data available for this business.")
+    else:
+        rh = main.get("rating_history", [])
+        ch = main.get("review_count_history", [])
+        if not rh and not ch:
+            st.info("No rating or review history available for this product.")
+        else:
+            rh_df = pd.DataFrame(rh) if rh else pd.DataFrame(columns=["date", "rating"])
+            ch_df = pd.DataFrame(ch) if ch else pd.DataFrame(columns=["date", "count"])
+            if not rh_df.empty:
+                rh_df["date"] = pd.to_datetime(rh_df["date"])
+                rh_df = rh_df.sort_values("date")
+            if not ch_df.empty:
+                ch_df["date"] = pd.to_datetime(ch_df["date"])
+                ch_df = ch_df.sort_values("date")
+            cutoff = pd.Timestamp(today - relativedelta(months=months))
+            prior_start = pd.Timestamp(today - relativedelta(months=months * 2))
+            cutoff_str = cutoff.strftime("%Y-%m")
+            today_str = pd.Timestamp(today).strftime("%Y-%m")
+            st.markdown(f"**{biz_name}** — Last {label} ({cutoff_str} → {today_str})")
+
+            # Compute comparison stats
+            # Rating: mean in recent vs prior equivalent window
+            rating_annotation = ""
+            if not rh_df.empty:
+                recent_r = rh_df[(rh_df["date"] >= cutoff)]["rating"]
+                prior_r = rh_df[(rh_df["date"] >= prior_start) & (rh_df["date"] < cutoff)]["rating"]
+                r_recent_avg = round(recent_r.mean(), 2) if len(recent_r) > 0 else None
+                r_prior_avg = round(prior_r.mean(), 2) if len(prior_r) > 0 else None
+                parts = []
+                if r_recent_avg is not None:
+                    parts.append(f"Recent avg: {r_recent_avg}")
+                if r_prior_avg is not None:
+                    parts.append(f"Prior {label} avg: {r_prior_avg}")
+                rating_annotation = " | ".join(parts)
+
+            # Reviews: total added in recent vs prior equivalent window
+            review_annotation = ""
+            if not ch_df.empty and len(ch_df) >= 2:
+                recent_c = ch_df[ch_df["date"] >= cutoff].sort_values("date")
+                prior_c = ch_df[(ch_df["date"] >= prior_start) & (ch_df["date"] < cutoff)].sort_values("date")
+                if len(recent_c) >= 2:
+                    added_recent = int(recent_c["count"].iloc[-1] - recent_c["count"].iloc[0])
+                else:
+                    added_recent = None
+                if len(prior_c) >= 2:
+                    added_prior = int(prior_c["count"].iloc[-1] - prior_c["count"].iloc[0])
+                else:
+                    added_prior = None
+                parts = []
+                if added_recent is not None:
+                    parts.append(f"Recent: +{added_recent:,} added")
+                if added_prior is not None:
+                    parts.append(f"Prior {label}: +{added_prior:,} added")
+                review_annotation = " | ".join(parts)
+
+            col_rating, col_reviews = st.columns(2)
+            with col_rating:
+                if not rh_df.empty and len(rh_df) > 0:
+                    fig_r = go.Figure()
+                    fig_r.add_trace(go.Scatter(
+                        x=rh_df["date"], y=rh_df["rating"],
+                        mode="lines+markers", marker=dict(size=4),
+                        line=dict(color="#636EFA"), name="Rating",
+                    ))
+                    fig_r.add_vrect(
+                        x0=cutoff, x1=pd.Timestamp(today),
+                        fillcolor="rgba(239,85,59,0.15)", line_width=0,
+                    )
+                    fig_r.update_layout(
+                        title=f"Rating", height=220,
+                        margin=dict(t=50, b=30, l=50, r=20),
+                        yaxis=dict(range=[3.5, 5.0]),
+                        showlegend=False,
+                    )
+                    if rating_annotation:
+                        fig_r.add_annotation(
+                            text=rating_annotation, xref="paper", yref="paper",
+                            x=0.5, y=1.08, showarrow=False,
+                            font=dict(size=11, color="#555"),
+                        )
+                    st.plotly_chart(fig_r, use_container_width=True, key=f"rating_line_{biz_name}_{label}")
+                else:
+                    st.info("No rating history available.")
+            with col_reviews:
+                if not ch_df.empty and len(ch_df) > 0:
+                    fig_rv = go.Figure()
+                    fig_rv.add_trace(go.Scatter(
+                        x=ch_df["date"], y=ch_df["count"],
+                        mode="lines+markers", marker=dict(size=4),
+                        line=dict(color="#636EFA"), name="Review Count",
+                    ))
+                    fig_rv.add_vrect(
+                        x0=cutoff, x1=pd.Timestamp(today),
+                        fillcolor="rgba(239,85,59,0.15)", line_width=0,
+                    )
+                    fig_rv.update_layout(
+                        title=f"Review Count", height=220,
+                        margin=dict(t=50, b=30, l=50, r=20),
+                        showlegend=False,
+                    )
+                    if review_annotation:
+                        fig_rv.add_annotation(
+                            text=review_annotation, xref="paper", yref="paper",
+                            x=0.5, y=1.08, showarrow=False,
+                            font=dict(size=11, color="#555"),
+                        )
+                    st.plotly_chart(fig_rv, use_container_width=True, key=f"review_line_{biz_name}_{label}")
+                else:
+                    st.info("No review count history available.")
+
+            # --- Comparison bar charts + frequency line chart ---
+            # Compute review frequency (reviews added per interval) from cumulative
+            freq_df = pd.DataFrame(columns=["date", "freq"])
+            if not ch_df.empty and len(ch_df) >= 2:
+                freq_df = ch_df.copy()
+                freq_df["freq"] = freq_df["count"].diff()
+                freq_df = freq_df.dropna(subset=["freq"])
+
+            # Rating: highlighted avg vs rest avg
+            r_highlighted_avg = None
+            r_rest_avg = None
+            if not rh_df.empty:
+                highlighted_r = rh_df[rh_df["date"] >= cutoff]["rating"]
+                rest_r = rh_df[rh_df["date"] < cutoff]["rating"]
+                r_highlighted_avg = round(highlighted_r.mean(), 2) if len(highlighted_r) > 0 else None
+                r_rest_avg = round(rest_r.mean(), 2) if len(rest_r) > 0 else None
+
+            # Frequency: highlighted avg vs rest avg
+            f_highlighted_avg = None
+            f_rest_avg = None
+            if not freq_df.empty:
+                highlighted_f = freq_df[freq_df["date"] >= cutoff]["freq"]
+                rest_f = freq_df[freq_df["date"] < cutoff]["freq"]
+                f_highlighted_avg = round(highlighted_f.mean(), 1) if len(highlighted_f) > 0 else None
+                f_rest_avg = round(rest_f.mean(), 1) if len(rest_f) > 0 else None
+
+            prior_start_str = prior_start.strftime("%Y-%m")
+            cb1, cb2, cb3 = st.columns(3)
+            with cb1:
+                if r_highlighted_avg is not None or r_rest_avg is not None:
+                    fig_rb = go.Figure()
+                    fig_rb.add_trace(go.Bar(
+                        x=[f"Recent<br>{cutoff_str}→{today_str}", f"Prior<br>{prior_start_str}→{cutoff_str}"],
+                        y=[r_highlighted_avg, r_rest_avg],
+                        marker_color=["#EF553B", "#636EFA"],
+                        text=[f"{v}" if v is not None else "" for v in [r_highlighted_avg, r_rest_avg]],
+                        textposition="outside",
+                    ))
+                    fig_rb.update_layout(
+                        title=f"Avg Rating (mean over {label})", height=220,
+                        margin=dict(t=50, b=30, l=50, r=20),
+                        yaxis=dict(range=[3.5, 5.0]),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_rb, use_container_width=True, key=f"rating_bar_{biz_name}_{label}")
+                else:
+                    st.info("No rating data for comparison.")
+            with cb2:
+                if not freq_df.empty and len(freq_df) > 0:
+                    fig_freq = go.Figure()
+                    fig_freq.add_trace(go.Scatter(
+                        x=freq_df["date"], y=freq_df["freq"],
+                        mode="lines+markers", marker=dict(size=4),
+                        line=dict(color="#636EFA"), name="Reviews Added",
+                    ))
+                    fig_freq.add_vrect(
+                        x0=cutoff, x1=pd.Timestamp(today),
+                        fillcolor="rgba(239,85,59,0.15)", line_width=0,
+                    )
+                    fig_freq.update_layout(
+                        title="Review Frequency", height=220,
+                        margin=dict(t=50, b=30, l=50, r=20),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_freq, use_container_width=True, key=f"freq_line_{biz_name}_{label}")
+                else:
+                    st.info("No review frequency data available.")
+            with cb3:
+                if f_highlighted_avg is not None or f_rest_avg is not None:
+                    fig_fb = go.Figure()
+                    fig_fb.add_trace(go.Bar(
+                        x=[f"Recent<br>{cutoff_str}→{today_str}", f"Prior<br>{prior_start_str}→{cutoff_str}"],
+                        y=[f_highlighted_avg, f_rest_avg],
+                        marker_color=["#EF553B", "#636EFA"],
+                        text=[f"{v}" if v is not None else "" for v in [f_highlighted_avg, f_rest_avg]],
+                        textposition="outside",
+                    ))
+                    fig_fb.update_layout(
+                        title=f"Avg Review Freq (mean over {label})", height=220,
+                        margin=dict(t=50, b=30, l=50, r=20),
+                        yaxis=dict(rangemode="tozero"),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_fb, use_container_width=True, key=f"freq_bar_{biz_name}_{label}")
+                else:
+                    st.info("No frequency data for comparison.")
 
     with st.expander("Metric Definitions, Review Integrity & Date Range Impact", expanded=False):
         for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
@@ -1376,11 +1633,9 @@ def page_executive_summary(biz_data):
         st.markdown("""
 **Reading the comparison table:**
 - **Weighted Avg Rating** — products with more reviews have more weight. A 4.6 product with 7,000 reviews dominates over a 3.4 product with 16 reviews.
-- **Rating Trend** — STABLE/IMPROVING/DECLINING compares first half vs second half of the selected period. The numbers in parentheses show the actual average shift.
+- **Rating Trend** — STABLE/IMPROVING/DECLINING compares first half vs second half of the data. The numbers in parentheses show the actual average shift.
 - **Review Growth Direction** — ACCELERATING means the product is gaining reviews faster recently; DECELERATING means it's slowing down.
-- **Data Range** — the period covered by Keepa data within your selected date range filter.
-
-**Date range:** All values on this page reflect your sidebar date range filter. Change it to zoom into recent performance or see the full historical picture.
+- **Data Range** — the full period covered by Keepa data for the main product.
 """)
 
 
@@ -1390,7 +1645,7 @@ def page_business_analysis(biz_data, biz_name):
     main = products[0]
 
     st.header(f"{biz_name} — Review Analysis")
-    st.caption("Filtered by selected date range")
+    st.caption("Based on Keepa API data | Full historical range")
 
     # KPI row
     cols = st.columns(6)
@@ -1441,14 +1696,14 @@ def page_business_analysis(biz_data, biz_name):
 
     with st.expander("Metric Definitions, Review Integrity & Date Range Impact", expanded=False):
         st.markdown(f"""
-**You're looking at** a summary of {biz_name}'s Amazon review data from Keepa, filtered to your selected date range.
+**You're looking at** a summary of {biz_name}'s Amazon review data from Keepa, using the full historical data range.
 
 **Reading the numbers:**
 - **Products** — number of unique products (deduplicated by parent ASIN). The number in parentheses is total color/style variants sharing those review pools.
-- **Total Reviews** — sum of review counts across all products at the end of the selected period.
+- **Total Reviews** — sum of review counts across all products at the latest data point.
 - **Avg Rating** — weighted average rating across all products, weighted by review count (so a product with 7,000 reviews matters more than one with 100).
-- **Review Growth** — how many new reviews the main product gains per month on average over the selected period. Higher = more customers buying.
-- **Rating Trend** — compares the average rating in the first half vs second half of the selected period. STABLE means quality hasn't changed; DECLINING means recent ratings are lower.
+- **Review Growth** — how many new reviews the main product gains per month on average. Higher = more customers buying.
+- **Rating Trend** — compares the average rating in the first half vs second half of the data. STABLE means quality hasn't changed; DECLINING means recent ratings are lower.
 - **Main Product Sales Rank** — where the main product ranks in sales compared to every other product in the same Amazon category. Lower number = more sales. For example, rank 3,000 means only 2,999 products sell more in that category.
 
 **Review Integrity Assessment**
@@ -1759,8 +2014,8 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
 
 ---
 
-**How the date range affects this table:**
-All values are computed from data within your selected date range. Rating uses the last data point in range. Reviews/mo divides review growth across the months in range. Rating Trend splits the in-range data in half. Narrowing the range means fewer data points — trends become less reliable but more recent. If a product has no data in the selected range, values show "?".
+**How values are computed:**
+All values use the full historical data range. Rating uses the last data point. Reviews/mo divides review growth across the total months of data. Rating Trend splits the data in half. If a product has no data, values show "?".
 """)
 
 
@@ -1769,7 +2024,7 @@ def page_evaluation(biz_data, biz_name):
     m = biz_data[biz_name]["metrics"]
 
     st.header(f"{biz_name} — Acquisition Evaluation")
-    st.caption("Based on Keepa API data, filtered by selected date range. Verify financials independently.")
+    st.caption("Based on Keepa API data | Full historical range. Verify financials independently.")
 
     main = products[0]
     main_ch = main["review_count_history"]
@@ -2184,10 +2439,10 @@ def _period_summary(products, label, cutoff_iso):
 
 def page_yearly_breakdown(biz_data, biz_name):
     """Static yearly breakdown showing rating and review trends year over year.
-    This page always uses full historical data — it is NOT affected by the date range filter."""
+    Static yearly breakdown showing rating and review trends year over year."""
     products = biz_data[biz_name]["products"]
     st.header(f"{biz_name} — Yearly Breakdown")
-    st.caption("Source: Keepa API (keepa.com) | Static summary — not affected by date range filter")
+    st.caption("Source: Keepa API (keepa.com) | Full historical data")
 
     # Product overview table
     overview_rows = []
@@ -2677,7 +2932,7 @@ Missing data points are forward-filled before summing.
 - **Sales rank is relative, not absolute** — Rank depends on category size and competition. A rank of 5,000 in "Cell Phones & Accessories" means different volume than 5,000 in "Toys & Games".
 - **Rating data has gaps** — Keepa samples ratings less frequently than review counts. Some product/year combinations have no rating samples even though Keepa is still tracking review counts. The yearly breakdown carries forward the last known rating where possible (marked "carried forward" in the table).
 - **No competitor analysis** — Dashboard only shows these products, not competing products in the same categories.
-- **Date range filter scope** — The date range filter affects Executive Summary, Business Analysis, and Evaluation pages. Yearly Breakdown and Seller Conversation use full historical data regardless of the filter.
+- **Data scope** — All pages use the full historical data from Keepa.
 
 ---
 
@@ -2720,55 +2975,16 @@ def main():
         ],
     )
 
-    # Date range filter
-    st.sidebar.divider()
-    min_date, max_date = get_date_range(biz_data)
-    st.sidebar.markdown("**Date Range Filter**")
-    st.sidebar.caption("Affects: Executive Summary, Business Analysis, Evaluation pages. Does NOT affect: Yearly Breakdown, Seller Conversation, Methodology.")
-    start_date = st.sidebar.date_input("Start", value=min_date, min_value=min_date, max_value=max_date, key="date_start")
-    end_date = st.sidebar.date_input("End", value=max_date, min_value=min_date, max_value=max_date, key="date_end")
-
-    if start_date >= end_date:
-        st.sidebar.error("Start date must be before end date.")
-        return
-
-    # Show per-product data availability as reference
-    st.sidebar.divider()
-    st.sidebar.markdown("**Data Availability by Product**")
-    for biz_name_ref in ["Wallaroo Wallets", "TeacherFav"]:
-        st.sidebar.markdown(f"*{biz_name_ref}*")
-        for p in biz_data[biz_name_ref]["products"]:
-            all_dates = (
-                [r["date"][:10] for r in p["rating_history"]]
-                + [c["date"][:10] for c in p["review_count_history"]]
-            )
-            name = product_name(p, short=True)
-            if all_dates:
-                p_min = min(all_dates)[:7]
-                p_max = max(all_dates)[:7]
-                st.sidebar.caption(f"{name}: {p_min} to {p_max}")
-            else:
-                st.sidebar.caption(f"{name}: No data")
-
-    # Build filtered data
-    filtered_data = {}
-    for biz_name in biz_data:
-        fp = filter_products(biz_data[biz_name]["products"], start_date, end_date)
-        filtered_data[biz_name] = {
-            "products": fp,
-            "metrics": compute_metrics(fp),
-        }
-
     if page == "Executive Summary":
-        page_executive_summary(filtered_data)
+        page_executive_summary(biz_data)
     elif page == "Wallaroo Wallets":
-        page_business_analysis(filtered_data, "Wallaroo Wallets")
+        page_business_analysis(biz_data, "Wallaroo Wallets")
     elif page == "TeacherFav":
-        page_business_analysis(filtered_data, "TeacherFav")
+        page_business_analysis(biz_data, "TeacherFav")
     elif page == "Wallaroo — Evaluation":
-        page_evaluation(filtered_data, "Wallaroo Wallets")
+        page_evaluation(biz_data, "Wallaroo Wallets")
     elif page == "TeacherFav — Evaluation":
-        page_evaluation(filtered_data, "TeacherFav")
+        page_evaluation(biz_data, "TeacherFav")
     elif page == "Wallaroo — Yearly Breakdown":
         page_yearly_breakdown(biz_data, "Wallaroo Wallets")
     elif page == "TeacherFav — Yearly Breakdown":
