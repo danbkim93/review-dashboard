@@ -1556,7 +1556,7 @@ def page_executive_summary(biz_data):
                 if r_highlighted_avg is not None or r_rest_avg is not None:
                     fig_rb = go.Figure()
                     fig_rb.add_trace(go.Bar(
-                        x=[f"Recent<br>{cutoff_str}→{today_str}", f"Prior<br>{prior_start_str}→{cutoff_str}"],
+                        x=[f"Recent (mean)<br>{cutoff_str}→{today_str}", f"Prior (mean)<br>{prior_start_str}→{cutoff_str}"],
                         y=[r_highlighted_avg, r_rest_avg],
                         marker_color=["#EF553B", "#636EFA"],
                         text=[f"{v}" if v is not None else "" for v in [r_highlighted_avg, r_rest_avg]],
@@ -1595,7 +1595,7 @@ def page_executive_summary(biz_data):
                 if f_highlighted_avg is not None or f_rest_avg is not None:
                     fig_fb = go.Figure()
                     fig_fb.add_trace(go.Bar(
-                        x=[f"Recent<br>{cutoff_str}→{today_str}", f"Prior<br>{prior_start_str}→{cutoff_str}"],
+                        x=[f"Recent (mean)<br>{cutoff_str}→{today_str}", f"Prior (mean)<br>{prior_start_str}→{cutoff_str}"],
                         y=[f_highlighted_avg, f_rest_avg],
                         marker_color=["#EF553B", "#636EFA"],
                         text=[f"{v}" if v is not None else "" for v in [f_highlighted_avg, f_rest_avg]],
