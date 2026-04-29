@@ -1400,27 +1400,33 @@ def page_executive_summary(biz_data):
                     f"Avg: {avg_rev:,}"
                 )
 
-            # Review Growth with main/high/low growth products + time range
-            st.metric("Review Growth (reviews/mo)", f"{m['main_growth_per_mo']:.1f}")
-            if prods_with_reviews and len(prods_with_reviews) > 0:
+            # Review Growth by time window (6mo, 1yr, 2yr) with main/low/high per product
+            st.markdown("**Review Growth (reviews/mo)**")
+            today_dt = date.today()
+            for gl, gmo in [("6mo", 6), ("1yr", 12), ("2yr", 24)]:
+                g_start = today_dt - relativedelta(months=gmo)
                 growth_data = []
                 for p in prods_with_reviews:
                     ch = p["review_count_history"]
                     if len(ch) >= 2:
-                        first_dt = datetime.fromisoformat(ch[0]["date"])
-                        last_dt = datetime.fromisoformat(ch[-1]["date"])
-                        span = max(1, (last_dt - first_dt).days / 30.44)
-                        gpm = (ch[-1]["count"] - ch[0]["count"]) / span
-                        growth_data.append((round(gpm, 1), p))
+                        cutoff_iso = g_start.isoformat()
+                        past = [c for c in ch if c["date"] <= cutoff_iso]
+                        if past:
+                            ref = past[-1]
+                            latest = ch[-1]
+                            added = latest["count"] - ref["count"]
+                            span = max(1, (datetime.fromisoformat(latest["date"]) - datetime.fromisoformat(ref["date"])).days / 30.44)
+                            gpm = round(added / span, 1)
+                            growth_data.append((gpm, p))
                 if growth_data:
                     main_g, main_g_p = growth_data[0]
                     lo_g, lo_g_p = min(growth_data, key=lambda x: x[0])
                     hi_g, hi_g_p = max(growth_data, key=lambda x: x[0])
                     st.caption(
+                        f"**{gl}** ({g_start.strftime('%Y-%m')} → {today_dt.strftime('%Y-%m')}): "
                         f"[Main: {main_g}/mo]({amazon_link(main_g_p['representative_asin'])}) · "
                         f"[Low: {lo_g}/mo]({amazon_link(lo_g_p['representative_asin'])}) · "
-                        f"[High: {hi_g}/mo]({amazon_link(hi_g_p['representative_asin'])})  \n"
-                        f"Over full data range: {m['main_first_date']} → {m['main_last_date']}"
+                        f"[High: {hi_g}/mo]({amazon_link(hi_g_p['representative_asin'])})"
                     )
             st.caption("*Main product = product with most reviews*")
 
@@ -1493,7 +1499,6 @@ def page_executive_summary(biz_data):
             "Total Reviews (All Products)",
             "Weighted Avg Rating",
             "Main Product",
-            "Main Product Rating",
             "Main Product Reviews",
             "Rating Trend (Main)",
             "Review Growth (Main, reviews/mo)",
@@ -1506,7 +1511,6 @@ def page_executive_summary(biz_data):
             f"{w['total_reviews']:,}",
             f"{w['weighted_avg_rating']:.1f}" if w["weighted_avg_rating"] else "?",
             short_title(w["main_title"], 50),
-            f"{w['main_rating']:.1f}" if w["main_rating"] else "?",
             f"{w['main_reviews']:,}",
             f"{w['rating_periods']['1yr']['from_rating']:.1f} → {w['rating_periods']['1yr']['to_rating']:.1f} ({w['rating_periods']['1yr']['delta']:+.2f}, {w['rating_periods']['1yr']['from_month']} → now)" if '1yr' in w.get('rating_periods', {}) else f"{w['main_r_dir']} ({w['main_early_r']:.1f} -> {w['main_recent_r']:.1f})",
             f"{w['main_growth_per_mo']:.1f} reviews/mo",
@@ -1519,7 +1523,6 @@ def page_executive_summary(biz_data):
             f"{t['total_reviews']:,}",
             f"{t['weighted_avg_rating']:.1f}" if t["weighted_avg_rating"] else "?",
             short_title(t["main_title"], 50),
-            f"{t['main_rating']:.1f}" if t["main_rating"] else "?",
             f"{t['main_reviews']:,}",
             f"{t['rating_periods']['1yr']['from_rating']:.1f} → {t['rating_periods']['1yr']['to_rating']:.1f} ({t['rating_periods']['1yr']['delta']:+.2f}, {t['rating_periods']['1yr']['from_month']} → now)" if '1yr' in t.get('rating_periods', {}) else f"{t['main_r_dir']} ({t['main_early_r']:.1f} -> {t['main_recent_r']:.1f})",
             f"{t['main_growth_per_mo']:.1f} reviews/mo",
