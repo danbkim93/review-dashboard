@@ -558,6 +558,109 @@ def render_notable_events(target_products, label):
         else:
             st.success("No significant price changes detected.")
 
+    # ── Review spike ↔ Rating correlation ──
+    st.markdown("**Review Spikes vs Rating** — did the rating change when reviews spiked or were purged?")
+    st.caption(
+        "For each large review event (purge or surge), shows the nearest rating before and after (within 30 days). "
+        "If a purge drops the rating, the removed reviews were likely high-star (inflated). "
+        "If rating stays flat, the removed reviews matched the product's true quality."
+    )
+
+    correlated_rows = []
+    for p in target_products:
+        name = product_name(p, short=True)
+        ch = p.get("review_count_history", [])
+        rh = p.get("rating_history", [])
+        review_spikes = detect_review_spikes(ch)
+        for spike in review_spikes:
+            event_dt = datetime.fromisoformat(spike["date"])
+            # Find nearest rating before event
+            r_before_list = [r for r in rh if datetime.fromisoformat(r["date"]) <= event_dt]
+            r_after_list = [r for r in rh if event_dt <= datetime.fromisoformat(r["date"]) <= event_dt + timedelta(days=30)]
+            rb = r_before_list[-1] if r_before_list else None
+            ra = r_after_list[0] if r_after_list else None
+            row = {
+                "Product": name,
+                "Date": spike["date"][:7],
+                "Event": "Purge" if spike["direction"] == "purge" else "Surge",
+                "Reviews Δ": f"{spike['change']:+,}",
+                "Count After": f"{spike['count']:,}",
+            }
+            if rb and ra:
+                delta = round(ra["rating"] - rb["rating"], 2)
+                row["Rating Before"] = rb["rating"]
+                row["Rating After"] = ra["rating"]
+                row["Rating Δ"] = f"{delta:+.1f}" if delta != 0 else "—"
+                if spike["direction"] == "purge" and delta < -0.1:
+                    row["Read"] = "Purged reviews were likely higher-rated than average"
+                elif spike["direction"] == "purge" and delta > 0.1:
+                    row["Read"] = "Purged reviews were lower-rated — rating improved after removal"
+                elif spike["direction"] == "surge" and delta > 0.1:
+                    row["Read"] = "Surge brought higher-rated reviews"
+                elif spike["direction"] == "surge" and delta < -0.1:
+                    row["Read"] = "Surge brought lower-rated reviews — possible quality issue"
+                else:
+                    row["Read"] = "Rating unchanged — reviews matched product's true quality"
+            else:
+                days_to_nearest = None
+                if rb:
+                    days_to_nearest = (event_dt - datetime.fromisoformat(rb["date"])).days
+                row["Rating Before"] = f"{rb['rating']} ({days_to_nearest}d prior)" if rb else "—"
+                row["Rating After"] = "no data within 30d"
+                row["Rating Δ"] = "—"
+                row["Read"] = "Keepa rating data too sparse to compare"
+            correlated_rows.append(row)
+
+    if correlated_rows:
+        df_corr = pd.DataFrame(correlated_rows)
+        # Sort by absolute review change magnitude
+        df_corr["_abs"] = df_corr["Reviews Δ"].str.replace(",", "").str.replace("+", "").astype(int).abs()
+        df_corr = df_corr.sort_values("_abs", ascending=False).drop(columns=["_abs"])
+        st.dataframe(df_corr, use_container_width=True, hide_index=True)
+    else:
+        st.info("No review spikes detected for correlation analysis.")
+
+    # Dual-axis overlay chart: review count + rating on same timeline
+    for p in target_products:
+        name = product_name(p, short=True)
+        ch = p.get("review_count_history", [])
+        rh = p.get("rating_history", [])
+        if not ch or not rh:
+            continue
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        ch_dates = [c["date"] for c in ch]
+        ch_counts = [c["count"] for c in ch]
+        rh_dates = [r["date"] for r in rh]
+        rh_ratings = [r["rating"] for r in rh]
+        fig.add_trace(
+            go.Scatter(x=ch_dates, y=ch_counts, name="Review Count",
+                       line=dict(color="#636EFA"), opacity=0.6),
+            secondary_y=False,
+        )
+        fig.add_trace(
+            go.Scatter(x=rh_dates, y=rh_ratings, name="Rating",
+                       mode="lines+markers", marker=dict(size=5),
+                       line=dict(color="#EF553B", width=2)),
+            secondary_y=True,
+        )
+        # Mark purge/surge events
+        spikes = detect_review_spikes(ch)
+        for spike in spikes:
+            color = "red" if spike["direction"] == "purge" else "green"
+            fig.add_vline(x=spike["date"], line_dash="dot",
+                          line_color=color, opacity=0.4)
+        fig.update_layout(
+            title=f"{name} — Review Count vs Rating",
+            height=280,
+            margin=dict(t=40, b=30, l=50, r=50),
+            legend=dict(orientation="h", yanchor="top", y=-0.12,
+                        xanchor="center", x=0.5, font=dict(size=10)),
+        )
+        fig.update_yaxes(title_text="Review Count", secondary_y=False)
+        fig.update_yaxes(title_text="Rating", range=[3.5, 5.0], secondary_y=True)
+        st.plotly_chart(fig, use_container_width=True,
+                        key=f"spike_rating_overlay_{label}_{name}")
+
 
 def make_rating_chart(products, title, colors=None):
     fig = go.Figure()
