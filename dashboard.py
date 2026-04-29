@@ -20,6 +20,26 @@ from openpyxl.utils import column_index_from_string
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Page names used by sidebar radio — keep in sync with main()
+PAGE_NAMES = [
+    "Executive Summary",
+    "Wallaroo Wallets",
+    "TeacherFav",
+    "Wallaroo — Evaluation",
+    "TeacherFav — Evaluation",
+    "Wallaroo — Yearly Breakdown",
+    "TeacherFav — Yearly Breakdown",
+    "Wallaroo — Seller Conversation",
+    "Methodology & Definitions",
+]
+
+
+def nav_link(label, target_page, key):
+    """Render a small button that navigates to another page."""
+    if st.button(label, key=key, type="tertiary"):
+        st.session_state["nav_page"] = target_page
+        st.rerun()
+
 BIZ_COLORS = {
     "Wallaroo Wallets": {"primary": "#2c3e50", "accent": "#3498db"},
     "TeacherFav": {"primary": "#c0392b", "accent": "#e74c3c"},
@@ -473,6 +493,7 @@ def render_notable_events(target_products, label):
     """Render the two side-by-side notable events tables for a list of products."""
     st.subheader(f"Notable Events ({label})")
     st.caption("Click column headers to sort — sort by Change to see the largest spikes first.")
+    nav_link("📐 How spikes & purges signal manipulation → Methodology", "Methodology & Definitions", key=f"nav_events_meth_{label}")
 
     all_rating_events = []
     all_review_events = []
@@ -1360,6 +1381,7 @@ def page_executive_summary(biz_data):
     st.markdown("#### Recent Trends (Main Product)")
     st.caption("Rating, review growth, and sales rank for the main product over 6 months, 1 year, and 2 years. "
                "Sales rank: lower number = more sales; negative % = rank improved.")
+    nav_link("📐 Why we track trends → Methodology", "Methodology & Definitions", key="nav_trends_meth")
     today = date.today()
     period_months = {"6mo": 6, "1yr": 12, "2yr": 24}
     for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
@@ -1395,6 +1417,7 @@ def page_executive_summary(biz_data):
     st.markdown("#### Trend Charts (Main Product)")
     st.caption("Full time-series with the recent window highlighted. "
                "Annotations compare the recent window against the equivalent prior period.")
+    nav_link("📐 How charts catch sticky ratings & old hits → Methodology", "Methodology & Definitions", key="nav_charts_meth")
 
     window_options_raw = {"6mo": 6, "1yr": 12, "2yr": 24}
     window_display = []
@@ -1722,6 +1745,7 @@ def page_business_analysis(biz_data, biz_name):
     main_sig = integrity[0]  # main product (sorted by reviews desc)
 
     with st.expander("Metric Definitions, Review Integrity & Date Range Impact", expanded=False):
+        nav_link("📐 How we assess review integrity → Methodology", "Methodology & Definitions", key=f"nav_integrity_meth_{biz_name}")
         st.markdown(f"""
 **You're looking at** a summary of {biz_name}'s Amazon review data from Keepa, using the full historical data range.
 
@@ -1778,6 +1802,7 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
             st.caption(f"Review flags: {'; '.join(main_sig['red_flags'])}")
         else:
             st.caption("Review integrity: No manipulation signals detected — steady growth, no Amazon purges.")
+        nav_link("📐 What review drops & spikes mean → Methodology", "Methodology & Definitions", key=f"nav_charts_meth_{biz_name}")
 
         fig = make_rating_chart(
             [main],
@@ -2833,6 +2858,15 @@ A product with 8,000 reviews at 4.6★ could have quality problems for 6 months 
 - **Executive Summary → Trend Charts → Rating line chart**: Full time-series with the recent window highlighted in red — visual separation of "now" vs "then"
 - **Executive Summary → Avg Rating bar chart**: Compares mean rating in recent vs prior period — directly catches recent quality decline even if the aggregate hasn't moved
 - **[Business] page → Rating Trend KPI**: STABLE / IMPROVING / DECLINING label based on first-half vs second-half average
+""")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        nav_link("→ Executive Summary (trend table & charts)", "Executive Summary", key="meth1_exec")
+    with c2:
+        nav_link("→ Wallaroo Wallets (rating KPI)", "Wallaroo Wallets", key="meth1_wal")
+    with c3:
+        nav_link("→ TeacherFav (rating KPI)", "TeacherFav", key="meth1_tf")
+    st.markdown("""
 
 #### 2. Detects product/seller changes
 Common Amazon pattern: product builds reputation, then seller cheapens materials or listing gets hijacked. Old reviews mask the change.
@@ -2840,6 +2874,13 @@ Common Amazon pattern: product builds reputation, then seller cheapens materials
 **Where this is partially answered:**
 - **[Business] page → Notable Events → Rating Changes table**: Flags rating drops > 0.2 with "Possible quality issue or product change"
 - **[Business] page → Notable Events → Price Changes table**: Shows price increases/decreases > 20% — price drops after a rating drop can signal material cheapening
+""")
+    c1, c2 = st.columns(2)
+    with c1:
+        nav_link("→ Wallaroo Notable Events", "Wallaroo Wallets", key="meth2_wal")
+    with c2:
+        nav_link("→ TeacherFav Notable Events", "TeacherFav", key="meth2_tf")
+    st.markdown("""
 
 **What we don't have:**
 - No seller identity tracking — we can't detect if the seller behind the listing changed (listing hijack)
@@ -2854,6 +2895,15 @@ Sudden spikes in review volume (especially 5★ clusters) indicate paid reviews 
 - **Executive Summary → Review Frequency line chart**: Visual time-series of reviews/month — organic growth looks smooth, manipulation shows as sharp spikes
 - **[Business] page → Notable Events → Review Changes table**: Flags individual surge events ("Unusually high number of new reviews in a short period")
 - **[Business] page → Review Integrity Assessment** (in expander): Quarterly growth consistency check — flags if any quarter's growth > 2× the average
+""")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        nav_link("→ Executive Summary (box plot & frequency)", "Executive Summary", key="meth3_exec")
+    with c2:
+        nav_link("→ Wallaroo (events & integrity)", "Wallaroo Wallets", key="meth3_wal")
+    with c3:
+        nav_link("→ TeacherFav (events & integrity)", "TeacherFav", key="meth3_tf")
+    st.markdown("""
 
 **What we don't have:**
 - No star-rating breakdown per period — we can't detect "5★ clusters" specifically, only total review volume spikes
@@ -2870,6 +2920,17 @@ Two products both at 4.5★/5,000 reviews look identical, but one might have got
 - **Executive Summary → Review Frequency line chart**: Visual time-series makes it immediately obvious if the product is still gaining reviews or flatlined years ago
 - **[Evaluation] page → AI commentary**: Explicitly calls out when review acquisition has dropped below peak levels
 - **[Yearly Breakdown] page**: Year-by-year review additions show exactly when growth happened
+""")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        nav_link("→ Executive Summary", "Executive Summary", key="meth4_exec")
+    with c2:
+        nav_link("→ Wallaroo Evaluation", "Wallaroo — Evaluation", key="meth4_wal_eval")
+    with c3:
+        nav_link("→ TeacherFav Evaluation", "TeacherFav — Evaluation", key="meth4_tf_eval")
+    with c4:
+        nav_link("→ Yearly Breakdowns", "Wallaroo — Yearly Breakdown", key="meth4_yearly")
+    st.markdown("""
 
 #### 5. Review removals are a signal
 Amazon mass-purging reviews (visible as drops in review count charts) indicates past manipulation. This is valuable due diligence data.
@@ -2879,6 +2940,13 @@ Amazon mass-purging reviews (visible as drops in review count charts) indicates 
 - **[Business] page → Notable Events → Review Changes table**: Every purge event listed with date, size, and note "Amazon removed reviews — past review manipulation flagged"
 - **[Business] page → Review Integrity Assessment**: Counts total purge events and total reviews removed; flags products with >100 removed
 - **[Business] page → Price + Review overlay chart**: Green bars show monthly review additions with purge months excluded — lets you see the "clean" growth rate
+""")
+    c1, c2 = st.columns(2)
+    with c1:
+        nav_link("→ Wallaroo (review count chart & events)", "Wallaroo Wallets", key="meth5_wal")
+    with c2:
+        nav_link("→ TeacherFav (review count chart & events)", "TeacherFav", key="meth5_tf")
+    st.markdown("""
 
 **What we don't have:**
 - No breakdown of purge severity — a single removal of 5 reviews vs. a mass purge of 680 reviews are both flagged, but the severity implications are very different
@@ -3039,21 +3107,16 @@ def main():
 
     biz_data = load_data()
 
-    # Sidebar navigation
+    # Sidebar navigation — session_state allows cross-page linking
+    if "nav_page" not in st.session_state:
+        st.session_state["nav_page"] = PAGE_NAMES[0]
     page = st.sidebar.radio(
         "Navigation",
-        [
-            "Executive Summary",
-            "Wallaroo Wallets",
-            "TeacherFav",
-            "Wallaroo — Evaluation",
-            "TeacherFav — Evaluation",
-            "Wallaroo — Yearly Breakdown",
-            "TeacherFav — Yearly Breakdown",
-            "Wallaroo — Seller Conversation",
-            "Methodology & Definitions",
-        ],
+        PAGE_NAMES,
+        index=PAGE_NAMES.index(st.session_state["nav_page"]),
+        key="sidebar_nav",
     )
+    st.session_state["nav_page"] = page
 
     if page == "Executive Summary":
         page_executive_summary(biz_data)
