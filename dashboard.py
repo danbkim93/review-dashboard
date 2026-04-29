@@ -1603,31 +1603,38 @@ def page_executive_summary(biz_data):
             else:
                 st.info("No review frequency data available.")
         with cb3:
-            if f_highlighted_avg is not None or f_rest_avg is not None:
-                fig_fb = go.Figure()
-                fig_fb.add_trace(go.Bar(
-                    x=[f"Recent {label}<br>{cutoff_str}→{today_str}", f"Prior {label}<br>{prior_start_str}→{cutoff_str}"],
-                    y=[f_highlighted_avg, f_rest_avg],
-                    marker_color=["#EF553B", "#636EFA"],
-                    text=[f"{v}" if v is not None else "" for v in [f_highlighted_avg, f_rest_avg]],
-                    textposition="auto",
-                ))
-                fig_fb.update_layout(
-                    title=f"Reviews/Month ({label})", height=220,
+            # Box plot of review frequency: recent vs prior period
+            recent_freq = freq_df[freq_df["date"] >= cutoff]["freq"] if not freq_df.empty else pd.Series(dtype=float)
+            prior_freq = freq_df[(freq_df["date"] >= prior_start) & (freq_df["date"] < cutoff)]["freq"] if not freq_df.empty else pd.Series(dtype=float)
+            if len(recent_freq) > 1 or len(prior_freq) > 1:
+                fig_box = go.Figure()
+                if len(prior_freq) > 1:
+                    fig_box.add_trace(go.Box(
+                        y=prior_freq, name=f"Prior {label}",
+                        marker_color="#636EFA", boxmean=True,
+                    ))
+                if len(recent_freq) > 1:
+                    fig_box.add_trace(go.Box(
+                        y=recent_freq, name=f"Recent {label}",
+                        marker_color="#EF553B", boxmean=True,
+                    ))
+                fig_box.update_layout(
+                    title=f"Reviews/Mo Distribution ({label})", height=220,
                     margin=dict(t=50, b=30, l=50, r=20),
                     yaxis=dict(rangemode="tozero"),
                     showlegend=False,
                 )
-                st.plotly_chart(fig_fb, use_container_width=True, key=f"freq_bar_{biz_name}_{label}")
+                st.plotly_chart(fig_box, use_container_width=True, key=f"freq_box_{biz_name}_{label}")
             else:
-                st.info("No frequency data for comparison.")
+                st.info("Not enough data points for box plot.")
 
     st.caption(
         "**How chart values are calculated:** "
         "• **Avg Rating** = mean of all Keepa rating snapshots within the window. "
         "• **Review Frequency line** = reviews added between consecutive Keepa snapshots, normalized to reviews/month "
         "(diff ÷ days × 30.44). Negative diffs from Keepa data corrections are excluded. "
-        "• **Reviews/Month bar** = total reviews added in the window ÷ number of months (same as the table). "
+        "• **Reviews/Mo Distribution box plot** = spread of per-snapshot reviews/month values; diamond = mean, line = median. "
+        "Shows whether review velocity is steady or spiky. "
         "• **Recent** = the selected time window ending today. **Prior** = the same-length window immediately before it."
     )
 
