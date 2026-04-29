@@ -1362,254 +1362,274 @@ def page_executive_summary(biz_data):
                "Sales rank: lower number = more sales; negative % = rank improved.")
     today = date.today()
     period_months = {"6mo": 6, "1yr": 12, "2yr": 24}
-    trend_rows = []
-    for label in ["6mo", "1yr", "2yr"]:
-        start = today - relativedelta(months=period_months[label])
-        row = {"Period": f"Last {label} ({start.strftime('%Y-%m')} → {today.strftime('%Y-%m')})"}
-        for biz_name, prefix in [("Wallaroo Wallets", "Wallaroo"), ("TeacherFav", "TeacherFav")]:
-            bm = biz_data[biz_name]["metrics"]
+    for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
+        st.markdown(f"**{biz_name}**")
+        bm = biz_data[biz_name]["metrics"]
+        trend_rows = []
+        for label in ["6mo", "1yr", "2yr"]:
+            start = today - relativedelta(months=period_months[label])
+            row = {"Period": f"Last {label} ({start.strftime('%Y-%m')} → {today.strftime('%Y-%m')})"}
             # Rating
             if label in bm.get("rating_periods", {}):
                 rp = bm["rating_periods"][label]
-                row[f"{prefix} Rating"] = f"{rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({rp['delta']:+.2f})"
+                row["Rating"] = f"{rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({rp['delta']:+.2f})"
             else:
-                row[f"{prefix} Rating"] = "—"
+                row["Rating"] = "—"
             # Reviews added + per month
             if label in bm.get("review_periods", {}):
                 rvp = bm["review_periods"][label]
-                row[f"{prefix} Reviews"] = f"+{rvp['added']:,} ({rvp['per_month']:.1f}/mo)"
+                row["Reviews"] = f"+{rvp['added']:,} ({rvp['per_month']:.1f}/mo)"
             else:
-                row[f"{prefix} Reviews"] = "—"
+                row["Reviews"] = "—"
             # Sales Rank
             if label in bm.get("main_rank_periods", {}):
                 srp = bm["main_rank_periods"][label]
-                row[f"{prefix} Sales Rank"] = f"#{srp['from_rank']:,.0f} → #{srp['to_rank']:,.0f} ({srp['pct_change']:+.0f}%)"
+                row["Sales Rank"] = f"#{srp['from_rank']:,.0f} → #{srp['to_rank']:,.0f} ({srp['pct_change']:+.0f}%)"
             else:
-                row[f"{prefix} Sales Rank"] = "—"
-        trend_rows.append(row)
-    if trend_rows:
-        st.dataframe(pd.DataFrame(trend_rows), use_container_width=True, hide_index=True)
+                row["Sales Rank"] = "—"
+            trend_rows.append(row)
+        if trend_rows:
+            st.dataframe(pd.DataFrame(trend_rows), use_container_width=True, hide_index=True)
 
     # Trend charts — highlighted line charts for each time window
     st.markdown("#### Trend Charts (Main Product)")
     st.caption("Full time-series with the recent window highlighted. "
                "Annotations compare the recent window against the equivalent prior period.")
 
-    tc_col1, tc_col2 = st.columns(2)
-    with tc_col1:
-        biz_name = st.selectbox("Business", ["Wallaroo Wallets", "TeacherFav"], key="trend_biz_sel")
-    with tc_col2:
-        window_options_raw = {"6mo": 6, "1yr": 12, "2yr": 24}
-        window_display = []
-        for wlabel, wmonths in window_options_raw.items():
-            wstart = (today - relativedelta(months=wmonths)).strftime("%Y-%m")
-            wend = today.strftime("%Y-%m")
-            window_display.append(f"{wlabel} ({wstart} → {wend})")
-        window_sel = st.selectbox("Time Window", window_display, key="trend_window_sel")
-        window_label = window_sel.split(" (")[0]  # extract "6mo", "1yr", "2yr"
+    window_options_raw = {"6mo": 6, "1yr": 12, "2yr": 24}
+    window_display = []
+    for wlabel, wmonths in window_options_raw.items():
+        wstart = (today - relativedelta(months=wmonths)).strftime("%Y-%m")
+        wend = today.strftime("%Y-%m")
+        window_display.append(f"{wlabel} ({wstart} → {wend})")
+    window_sel = st.selectbox("Time Window", window_display, key="trend_window_sel")
+    window_label = window_sel.split(" (")[0]  # extract "6mo", "1yr", "2yr"
     months = window_options_raw[window_label]
     label = window_label
 
-    prods = biz_data[biz_name]["products"]
-    main = max(prods, key=lambda p: p.get("reviewCount", 0)) if prods else None
-    if not main:
-        st.info("No product data available for this business.")
-    else:
+    for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
+        st.markdown("---")
+        prods = biz_data[biz_name]["products"]
+        main = max(prods, key=lambda p: p.get("reviewCount", 0)) if prods else None
+        if not main:
+            st.info(f"No product data available for {biz_name}.")
+            continue
         rh = main.get("rating_history", [])
         ch = main.get("review_count_history", [])
         if not rh and not ch:
             st.info("No rating or review history available for this product.")
-        else:
-            rh_df = pd.DataFrame(rh) if rh else pd.DataFrame(columns=["date", "rating"])
-            ch_df = pd.DataFrame(ch) if ch else pd.DataFrame(columns=["date", "count"])
-            if not rh_df.empty:
-                rh_df["date"] = pd.to_datetime(rh_df["date"])
-                rh_df = rh_df.sort_values("date")
-            if not ch_df.empty:
-                ch_df["date"] = pd.to_datetime(ch_df["date"])
-                ch_df = ch_df.sort_values("date")
-            cutoff = pd.Timestamp(today - relativedelta(months=months))
-            prior_start = pd.Timestamp(today - relativedelta(months=months * 2))
-            cutoff_str = cutoff.strftime("%Y-%m")
-            today_str = pd.Timestamp(today).strftime("%Y-%m")
-            st.markdown(f"**{biz_name}** — Last {label} ({cutoff_str} → {today_str})")
+            continue
+        rh_df = pd.DataFrame(rh) if rh else pd.DataFrame(columns=["date", "rating"])
+        ch_df = pd.DataFrame(ch) if ch else pd.DataFrame(columns=["date", "count"])
+        if not rh_df.empty:
+            rh_df["date"] = pd.to_datetime(rh_df["date"])
+            rh_df = rh_df.sort_values("date")
+        if not ch_df.empty:
+            ch_df["date"] = pd.to_datetime(ch_df["date"])
+            ch_df = ch_df.sort_values("date")
+        cutoff = pd.Timestamp(today - relativedelta(months=months))
+        prior_start = pd.Timestamp(today - relativedelta(months=months * 2))
+        cutoff_str = cutoff.strftime("%Y-%m")
+        today_str = pd.Timestamp(today).strftime("%Y-%m")
+        st.markdown(f"**{biz_name}** — Last {label} ({cutoff_str} → {today_str})")
 
-            # Compute comparison stats
-            # Rating: mean in recent vs prior equivalent window
-            rating_annotation = ""
-            if not rh_df.empty:
-                recent_r = rh_df[(rh_df["date"] >= cutoff)]["rating"]
-                prior_r = rh_df[(rh_df["date"] >= prior_start) & (rh_df["date"] < cutoff)]["rating"]
-                r_recent_avg = round(recent_r.mean(), 2) if len(recent_r) > 0 else None
-                r_prior_avg = round(prior_r.mean(), 2) if len(prior_r) > 0 else None
-                parts = []
-                if r_recent_avg is not None:
-                    parts.append(f"Recent avg: {r_recent_avg}")
-                if r_prior_avg is not None:
-                    parts.append(f"Prior {label} avg: {r_prior_avg}")
-                rating_annotation = " | ".join(parts)
+        # Compute comparison stats
+        # Rating: mean in recent vs prior equivalent window
+        rating_annotation = ""
+        if not rh_df.empty:
+            recent_r = rh_df[(rh_df["date"] >= cutoff)]["rating"]
+            prior_r = rh_df[(rh_df["date"] >= prior_start) & (rh_df["date"] < cutoff)]["rating"]
+            r_recent_avg = round(recent_r.mean(), 2) if len(recent_r) > 0 else None
+            r_prior_avg = round(prior_r.mean(), 2) if len(prior_r) > 0 else None
+            parts = []
+            if r_recent_avg is not None:
+                parts.append(f"Recent avg: {r_recent_avg}")
+            if r_prior_avg is not None:
+                parts.append(f"Prior {label} avg: {r_prior_avg}")
+            rating_annotation = " | ".join(parts)
 
-            # Reviews: total added in recent vs prior equivalent window
-            review_annotation = ""
-            if not ch_df.empty and len(ch_df) >= 2:
-                recent_c = ch_df[ch_df["date"] >= cutoff].sort_values("date")
-                prior_c = ch_df[(ch_df["date"] >= prior_start) & (ch_df["date"] < cutoff)].sort_values("date")
-                if len(recent_c) >= 2:
-                    added_recent = int(recent_c["count"].iloc[-1] - recent_c["count"].iloc[0])
-                else:
-                    added_recent = None
-                if len(prior_c) >= 2:
-                    added_prior = int(prior_c["count"].iloc[-1] - prior_c["count"].iloc[0])
-                else:
-                    added_prior = None
-                parts = []
-                if added_recent is not None:
-                    parts.append(f"Recent: +{added_recent:,} added")
-                if added_prior is not None:
-                    parts.append(f"Prior {label}: +{added_prior:,} added")
-                review_annotation = " | ".join(parts)
+        # Reviews: total added and per-month using same algorithm as metrics
+        bm = biz_data[biz_name]["metrics"]
+        added_recent = None
+        added_prior = None
+        recent_per_mo = None
+        prior_per_mo = None
+        ch_raw = main.get("review_count_history", [])
+        if label in bm.get("review_periods", {}):
+            rvp = bm["review_periods"][label]
+            added_recent = rvp["added"]
+            recent_per_mo = round(rvp["per_month"], 1)
+        # Prior: replicate same algorithm anchored at the cutoff snapshot
+        if ch_raw and len(ch_raw) >= 2:
+            cutoff_dt_m = datetime.fromisoformat(ch_raw[-1]["date"]) - timedelta(days=months * 30.44)
+            past_at_cutoff = [c for c in ch_raw if c["date"] <= cutoff_dt_m.isoformat()]
+            if past_at_cutoff:
+                anchor = past_at_cutoff[-1]
+                prior_cutoff_dt = datetime.fromisoformat(anchor["date"]) - timedelta(days=months * 30.44)
+                prior_past = [c for c in ch_raw if c["date"] <= prior_cutoff_dt.isoformat()]
+                if prior_past:
+                    ref = prior_past[-1]
+                    added_prior = anchor["count"] - ref["count"]
+                    span_prior = max(1, (datetime.fromisoformat(anchor["date"]) - datetime.fromisoformat(ref["date"])).days / 30.44)
+                    prior_per_mo = round(added_prior / span_prior, 1)
+        review_annotation = ""
+        parts = []
+        if added_recent is not None:
+            parts.append(f"Recent: +{added_recent:,} added")
+        if added_prior is not None:
+            parts.append(f"Prior {label}: +{added_prior:,} added")
+        review_annotation = " | ".join(parts)
 
-            col_rating, col_reviews = st.columns(2)
-            with col_rating:
-                if not rh_df.empty and len(rh_df) > 0:
-                    fig_r = go.Figure()
-                    fig_r.add_trace(go.Scatter(
-                        x=rh_df["date"], y=rh_df["rating"],
-                        mode="lines+markers", marker=dict(size=4),
-                        line=dict(color="#636EFA"), name="Rating",
-                    ))
-                    fig_r.add_vrect(
-                        x0=cutoff, x1=pd.Timestamp(today),
-                        fillcolor="rgba(239,85,59,0.15)", line_width=0,
+        col_rating, col_reviews = st.columns(2)
+        with col_rating:
+            if not rh_df.empty and len(rh_df) > 0:
+                fig_r = go.Figure()
+                fig_r.add_trace(go.Scatter(
+                    x=rh_df["date"], y=rh_df["rating"],
+                    mode="lines+markers", marker=dict(size=4),
+                    line=dict(color="#636EFA"), name="Rating",
+                ))
+                fig_r.add_vrect(
+                    x0=cutoff, x1=pd.Timestamp(today),
+                    fillcolor="rgba(239,85,59,0.15)", line_width=0,
+                )
+                fig_r.update_layout(
+                    title=f"Rating", height=220,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    yaxis=dict(range=[3.5, 5.0]),
+                    showlegend=False,
+                )
+                if rating_annotation:
+                    fig_r.add_annotation(
+                        text=rating_annotation, xref="paper", yref="paper",
+                        x=0.5, y=1.08, showarrow=False,
+                        font=dict(size=11, color="#555"),
                     )
-                    fig_r.update_layout(
-                        title=f"Rating", height=220,
-                        margin=dict(t=50, b=30, l=50, r=20),
-                        yaxis=dict(range=[3.5, 5.0]),
-                        showlegend=False,
+                st.plotly_chart(fig_r, use_container_width=True, key=f"rating_line_{biz_name}_{label}")
+            else:
+                st.info("No rating history available.")
+        with col_reviews:
+            if not ch_df.empty and len(ch_df) > 0:
+                fig_rv = go.Figure()
+                fig_rv.add_trace(go.Scatter(
+                    x=ch_df["date"], y=ch_df["count"],
+                    mode="lines+markers", marker=dict(size=4),
+                    line=dict(color="#636EFA"), name="Review Count",
+                ))
+                fig_rv.add_vrect(
+                    x0=cutoff, x1=pd.Timestamp(today),
+                    fillcolor="rgba(239,85,59,0.15)", line_width=0,
+                )
+                fig_rv.update_layout(
+                    title=f"Review Count", height=220,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    showlegend=False,
+                )
+                if review_annotation:
+                    fig_rv.add_annotation(
+                        text=review_annotation, xref="paper", yref="paper",
+                        x=0.5, y=1.08, showarrow=False,
+                        font=dict(size=11, color="#555"),
                     )
-                    if rating_annotation:
-                        fig_r.add_annotation(
-                            text=rating_annotation, xref="paper", yref="paper",
-                            x=0.5, y=1.08, showarrow=False,
-                            font=dict(size=11, color="#555"),
-                        )
-                    st.plotly_chart(fig_r, use_container_width=True, key=f"rating_line_{biz_name}_{label}")
-                else:
-                    st.info("No rating history available.")
-            with col_reviews:
-                if not ch_df.empty and len(ch_df) > 0:
-                    fig_rv = go.Figure()
-                    fig_rv.add_trace(go.Scatter(
-                        x=ch_df["date"], y=ch_df["count"],
-                        mode="lines+markers", marker=dict(size=4),
-                        line=dict(color="#636EFA"), name="Review Count",
-                    ))
-                    fig_rv.add_vrect(
-                        x0=cutoff, x1=pd.Timestamp(today),
-                        fillcolor="rgba(239,85,59,0.15)", line_width=0,
-                    )
-                    fig_rv.update_layout(
-                        title=f"Review Count", height=220,
-                        margin=dict(t=50, b=30, l=50, r=20),
-                        showlegend=False,
-                    )
-                    if review_annotation:
-                        fig_rv.add_annotation(
-                            text=review_annotation, xref="paper", yref="paper",
-                            x=0.5, y=1.08, showarrow=False,
-                            font=dict(size=11, color="#555"),
-                        )
-                    st.plotly_chart(fig_rv, use_container_width=True, key=f"review_line_{biz_name}_{label}")
-                else:
-                    st.info("No review count history available.")
+                st.plotly_chart(fig_rv, use_container_width=True, key=f"review_line_{biz_name}_{label}")
+            else:
+                st.info("No review count history available.")
 
-            # --- Comparison bar charts + frequency line chart ---
-            # Compute review frequency (reviews added per interval) from cumulative
-            freq_df = pd.DataFrame(columns=["date", "freq"])
-            if not ch_df.empty and len(ch_df) >= 2:
-                freq_df = ch_df.copy()
-                freq_df["freq"] = freq_df["count"].diff()
-                freq_df = freq_df.dropna(subset=["freq"])
+        # --- Comparison bar charts + frequency line chart ---
+        # Compute review frequency (reviews added per interval) from cumulative
+        freq_df = pd.DataFrame(columns=["date", "freq"])
+        if not ch_df.empty and len(ch_df) >= 2:
+            freq_df = ch_df.copy()
+            freq_df["freq"] = freq_df["count"].diff()
+            freq_df["days"] = freq_df["date"].diff().dt.days
+            freq_df = freq_df.dropna(subset=["freq"])
+            freq_df = freq_df[freq_df["days"] > 0]
+            freq_df["freq"] = (freq_df["freq"] / freq_df["days"] * 30.44).round(1)
+            freq_df = freq_df[freq_df["freq"] >= 0]  # drop Keepa data-correction artifacts
+            freq_df = freq_df.drop(columns=["days"])
 
-            # Rating: highlighted avg vs rest avg
-            r_highlighted_avg = None
-            r_rest_avg = None
-            if not rh_df.empty:
-                highlighted_r = rh_df[rh_df["date"] >= cutoff]["rating"]
-                rest_r = rh_df[rh_df["date"] < cutoff]["rating"]
-                r_highlighted_avg = round(highlighted_r.mean(), 2) if len(highlighted_r) > 0 else None
-                r_rest_avg = round(rest_r.mean(), 2) if len(rest_r) > 0 else None
+        # Rating: highlighted avg vs rest avg
+        r_highlighted_avg = None
+        r_rest_avg = None
+        if not rh_df.empty:
+            highlighted_r = rh_df[rh_df["date"] >= cutoff]["rating"]
+            rest_r = rh_df[rh_df["date"] < cutoff]["rating"]
+            r_highlighted_avg = round(highlighted_r.mean(), 2) if len(highlighted_r) > 0 else None
+            r_rest_avg = round(rest_r.mean(), 2) if len(rest_r) > 0 else None
 
-            # Frequency: highlighted avg vs rest avg
-            f_highlighted_avg = None
-            f_rest_avg = None
-            if not freq_df.empty:
-                highlighted_f = freq_df[freq_df["date"] >= cutoff]["freq"]
-                rest_f = freq_df[freq_df["date"] < cutoff]["freq"]
-                f_highlighted_avg = round(highlighted_f.mean(), 1) if len(highlighted_f) > 0 else None
-                f_rest_avg = round(rest_f.mean(), 1) if len(rest_f) > 0 else None
+        # Frequency: reuse values computed above (same as table)
+        f_highlighted_avg = recent_per_mo
+        f_rest_avg = prior_per_mo
 
-            prior_start_str = prior_start.strftime("%Y-%m")
-            cb1, cb2, cb3 = st.columns(3)
-            with cb1:
-                if r_highlighted_avg is not None or r_rest_avg is not None:
-                    fig_rb = go.Figure()
-                    fig_rb.add_trace(go.Bar(
-                        x=[f"Recent (mean)<br>{cutoff_str}→{today_str}", f"Prior (mean)<br>{prior_start_str}→{cutoff_str}"],
-                        y=[r_highlighted_avg, r_rest_avg],
-                        marker_color=["#EF553B", "#636EFA"],
-                        text=[f"{v}" if v is not None else "" for v in [r_highlighted_avg, r_rest_avg]],
-                        textposition="outside",
-                    ))
-                    fig_rb.update_layout(
-                        title=f"Avg Rating (mean over {label})", height=220,
-                        margin=dict(t=50, b=30, l=50, r=20),
-                        yaxis=dict(range=[3.5, 5.0]),
-                        showlegend=False,
-                    )
-                    st.plotly_chart(fig_rb, use_container_width=True, key=f"rating_bar_{biz_name}_{label}")
-                else:
-                    st.info("No rating data for comparison.")
-            with cb2:
-                if not freq_df.empty and len(freq_df) > 0:
-                    fig_freq = go.Figure()
-                    fig_freq.add_trace(go.Scatter(
-                        x=freq_df["date"], y=freq_df["freq"],
-                        mode="lines+markers", marker=dict(size=4),
-                        line=dict(color="#636EFA"), name="Reviews Added",
-                    ))
-                    fig_freq.add_vrect(
-                        x0=cutoff, x1=pd.Timestamp(today),
-                        fillcolor="rgba(239,85,59,0.15)", line_width=0,
-                    )
-                    fig_freq.update_layout(
-                        title="Review Frequency", height=220,
-                        margin=dict(t=50, b=30, l=50, r=20),
-                        showlegend=False,
-                    )
-                    st.plotly_chart(fig_freq, use_container_width=True, key=f"freq_line_{biz_name}_{label}")
-                else:
-                    st.info("No review frequency data available.")
-            with cb3:
-                if f_highlighted_avg is not None or f_rest_avg is not None:
-                    fig_fb = go.Figure()
-                    fig_fb.add_trace(go.Bar(
-                        x=[f"Recent (mean)<br>{cutoff_str}→{today_str}", f"Prior (mean)<br>{prior_start_str}→{cutoff_str}"],
-                        y=[f_highlighted_avg, f_rest_avg],
-                        marker_color=["#EF553B", "#636EFA"],
-                        text=[f"{v}" if v is not None else "" for v in [f_highlighted_avg, f_rest_avg]],
-                        textposition="outside",
-                    ))
-                    fig_fb.update_layout(
-                        title=f"Avg Review Freq (mean over {label})", height=220,
-                        margin=dict(t=50, b=30, l=50, r=20),
-                        yaxis=dict(rangemode="tozero"),
-                        showlegend=False,
-                    )
-                    st.plotly_chart(fig_fb, use_container_width=True, key=f"freq_bar_{biz_name}_{label}")
-                else:
-                    st.info("No frequency data for comparison.")
+        prior_start_str = prior_start.strftime("%Y-%m")
+        cb1, cb2, cb3 = st.columns(3)
+        with cb1:
+            if r_highlighted_avg is not None or r_rest_avg is not None:
+                fig_rb = go.Figure()
+                fig_rb.add_trace(go.Bar(
+                    x=[f"Recent {label}<br>{cutoff_str}→{today_str}", f"Prior {label}<br>{prior_start_str}→{cutoff_str}"],
+                    y=[r_highlighted_avg, r_rest_avg],
+                    marker_color=["#EF553B", "#636EFA"],
+                    text=[f"{v}" if v is not None else "" for v in [r_highlighted_avg, r_rest_avg]],
+                    textposition="auto",
+                ))
+                fig_rb.update_layout(
+                    title=f"Avg Rating (mean over {label})", height=220,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    yaxis=dict(range=[3.5, 5.0]),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_rb, use_container_width=True, key=f"rating_bar_{biz_name}_{label}")
+            else:
+                st.info("No rating data for comparison.")
+        with cb2:
+            if not freq_df.empty and len(freq_df) > 0:
+                fig_freq = go.Figure()
+                fig_freq.add_trace(go.Scatter(
+                    x=freq_df["date"], y=freq_df["freq"],
+                    mode="lines+markers", marker=dict(size=4),
+                    line=dict(color="#636EFA"), name="Reviews Added",
+                ))
+                fig_freq.add_vrect(
+                    x0=cutoff, x1=pd.Timestamp(today),
+                    fillcolor="rgba(239,85,59,0.15)", line_width=0,
+                )
+                fig_freq.update_layout(
+                    title="Review Frequency (reviews/mo)", height=220,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_freq, use_container_width=True, key=f"freq_line_{biz_name}_{label}")
+            else:
+                st.info("No review frequency data available.")
+        with cb3:
+            if f_highlighted_avg is not None or f_rest_avg is not None:
+                fig_fb = go.Figure()
+                fig_fb.add_trace(go.Bar(
+                    x=[f"Recent {label}<br>{cutoff_str}→{today_str}", f"Prior {label}<br>{prior_start_str}→{cutoff_str}"],
+                    y=[f_highlighted_avg, f_rest_avg],
+                    marker_color=["#EF553B", "#636EFA"],
+                    text=[f"{v}" if v is not None else "" for v in [f_highlighted_avg, f_rest_avg]],
+                    textposition="auto",
+                ))
+                fig_fb.update_layout(
+                    title=f"Reviews/Month ({label})", height=220,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    yaxis=dict(rangemode="tozero"),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_fb, use_container_width=True, key=f"freq_bar_{biz_name}_{label}")
+            else:
+                st.info("No frequency data for comparison.")
+
+    st.caption(
+        "**How chart values are calculated:** "
+        "• **Avg Rating** = mean of all Keepa rating snapshots within the window. "
+        "• **Review Frequency line** = reviews added between consecutive Keepa snapshots, normalized to reviews/month "
+        "(diff ÷ days × 30.44). Negative diffs from Keepa data corrections are excluded. "
+        "• **Reviews/Month bar** = total reviews added in the window ÷ number of months (same as the table). "
+        "• **Recent** = the selected time window ending today. **Prior** = the same-length window immediately before it."
+    )
 
     with st.expander("Metric Definitions, Review Integrity & Date Range Impact", expanded=False):
         for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
