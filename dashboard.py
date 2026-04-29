@@ -2863,12 +2863,22 @@ We focus on the two questions that matter most for acquisition due diligence:
         main_sig = integrity[0]
         ch = main.get("review_count_history", [])
 
-        # Count purges and total removed
+        # Count purges and total removed (exclude parent ASIN reassignment artifacts)
         total_purge_events = 0
         total_removed = 0
         for p in products:
-            for i in range(1, len(p["review_count_history"])):
-                diff = p["review_count_history"][i]["count"] - p["review_count_history"][i - 1]["count"]
+            p_ch = p.get("review_count_history", [])
+            if not p_ch:
+                continue
+            current_count = p_ch[-1]["count"]
+            peak_count = max(c["count"] for c in p_ch)
+            # If peak is 3x+ current, this product's history has parent ASIN
+            # reassignment artifacts (reviews temporarily counted under wrong parent).
+            # Skip it — the drops aren't real Amazon purges.
+            if peak_count > current_count * 3 and current_count < 500:
+                continue
+            for i in range(1, len(p_ch)):
+                diff = p_ch[i]["count"] - p_ch[i - 1]["count"]
                 if diff < -5:
                     total_purge_events += 1
                     total_removed += abs(diff)
@@ -2933,6 +2943,11 @@ We focus on the two questions that matter most for acquisition due diligence:
             f"appears to be built on organic customer activity."
         )
 
+    st.caption(
+        "You can verify these numbers on each business page: the **Review Count chart** shows "
+        "drops as downward steps in the cumulative line, and the **Notable Events → Review Changes table** "
+        "lists every purge with date and size."
+    )
     c1, c2 = st.columns(2)
     with c1:
         nav_link("→ See Wallaroo review count chart & purge events", "Wallaroo Wallets", key="meth_integrity_wal")
@@ -3010,7 +3025,8 @@ We focus on the two questions that matter most for acquisition due diligence:
 
     st.markdown("""
 **What we can't answer with this data:**
-- Actual unit sales or revenue (reviews are a proxy — typically 1-5% of buyers leave a review)
+- **Wallaroo Wallets:** No P&L available — we only have reviews as a proxy for demand. Actual unit sales and revenue are unknown.
+- **TeacherFav:** We *do* have a seller-reported P&L, so revenue trends can be cross-checked against review velocity on the Evaluation page.
 - Whether the deceleration is category-wide or specific to this product
 - Whether the seller has shifted ad spend or strategy recently
 
