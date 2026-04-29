@@ -2830,7 +2830,7 @@ def page_seller_conversation():
     )
 
 
-def page_methodology():
+def page_methodology(biz_data):
     st.header("Methodology & Definitions")
     st.caption("How metrics are calculated and data is sourced")
 
@@ -2848,109 +2848,171 @@ Keepa provides **complete, accurate** historical data for ratings and review cou
 
 ### Why We Track Historical Trends
 
-A product with 4.6★ and 8,000 reviews looks great on the surface — but aggregate numbers can hide serious problems. This is why trend analysis is essential for acquisition due diligence:
-
-#### 1. Aggregate ratings are sticky/lagging
-A product with 8,000 reviews at 4.6★ could have quality problems for 6 months and the average barely moves. Recent trend catches this.
-
-**Where this is answered in the dashboard:**
-- **Executive Summary → Trend Table**: Rating column shows movement over 6mo/1yr/2yr (e.g. "4.6 → 4.5 (−0.10)")
-- **Executive Summary → Trend Charts → Rating line chart**: Full time-series with the recent window highlighted in red — visual separation of "now" vs "then"
-- **Executive Summary → Avg Rating bar chart**: Compares mean rating in recent vs prior period — directly catches recent quality decline even if the aggregate hasn't moved
-- **[Business] page → Rating Trend KPI**: STABLE / IMPROVING / DECLINING label based on first-half vs second-half average
+A product with 4.6★ and 8,000 reviews looks great on the surface — but aggregate numbers can hide serious problems.
+We focus on the two questions that matter most for acquisition due diligence:
 """)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        nav_link("→ Executive Summary (trend table & charts)", "Executive Summary", key="meth1_exec")
-    with c2:
-        nav_link("→ Wallaroo Wallets (rating KPI)", "Wallaroo Wallets", key="meth1_wal")
-    with c3:
-        nav_link("→ TeacherFav (rating KPI)", "TeacherFav", key="meth1_tf")
-    st.markdown("""
 
-#### 2. Detects product/seller changes
-Common Amazon pattern: product builds reputation, then seller cheapens materials or listing gets hijacked. Old reviews mask the change.
+    # ── Question 1: Are the reviews trustworthy? ──
+    st.markdown("#### Are these reviews real, or were they artificially inflated?")
 
-**Where this is partially answered:**
-- **[Business] page → Notable Events → Rating Changes table**: Flags rating drops > 0.2 with "Possible quality issue or product change"
-- **[Business] page → Notable Events → Price Changes table**: Shows price increases/decreases > 20% — price drops after a rating drop can signal material cheapening
-""")
+    # Compute actual purge/spike data per business
+    for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
+        products = biz_data[biz_name]["products"]
+        integrity = compute_integrity_signals(products)
+        main = products[0]
+        main_sig = integrity[0]
+        ch = main.get("review_count_history", [])
+
+        # Count purges and total removed
+        total_purge_events = 0
+        total_removed = 0
+        for p in products:
+            for i in range(1, len(p["review_count_history"])):
+                diff = p["review_count_history"][i]["count"] - p["review_count_history"][i - 1]["count"]
+                if diff < -5:
+                    total_purge_events += 1
+                    total_removed += abs(diff)
+
+        # Quarterly velocity for main product (last 12 months)
+        quarterly_rates = []
+        if ch and len(ch) >= 8:
+            last_dt = datetime.fromisoformat(ch[-1]["date"])
+            twelve_mo_ago = last_dt.timestamp() - 365 * 86400
+            recent = [c for c in ch if datetime.fromisoformat(c["date"]).timestamp() >= twelve_mo_ago]
+            if len(recent) >= 4:
+                q_len = len(recent) // 4
+                for q in range(4):
+                    s = q * q_len
+                    e = (q + 1) * q_len if q < 3 else len(recent) - 1
+                    days = max(1, (datetime.fromisoformat(recent[e]["date"]) - datetime.fromisoformat(recent[s]["date"])).days)
+                    added = recent[e]["count"] - recent[s]["count"]
+                    quarterly_rates.append(round(added / (days / 30.44), 1))
+
+        current_reviews = ch[-1]["count"] if ch else main.get("shared_reviews", 0)
+        current_rating = main.get("rating_history", [{}])[-1].get("rating", 0)
+
+        st.markdown(f"**{biz_name}** — main product: {current_reviews:,} reviews at {current_rating}★")
+
+        if total_removed > 100:
+            st.markdown(
+                f"- Amazon has removed **~{total_removed:,} reviews** across {total_purge_events} purge events. "
+                f"That's {'more than' if total_removed > current_reviews else 'a significant fraction of'} "
+                f"the {current_reviews:,} reviews that remain today. "
+                f"This means reviews were acquired through methods Amazon later flagged — "
+                f"likely incentivized reviews, giveaway campaigns, or review services."
+            )
+        elif total_removed > 0:
+            st.markdown(
+                f"- Amazon has removed {total_removed} reviews across {total_purge_events} event(s). "
+                f"Minor — consistent with routine Amazon enforcement, not a red flag."
+            )
+        else:
+            st.markdown("- No Amazon review purges detected. Review base appears intact.")
+
+        if quarterly_rates:
+            max_q = max(quarterly_rates)
+            min_q = min(quarterly_rates)
+            if max_q > 0 and min_q >= 0 and max_q > min_q * 5:
+                st.markdown(
+                    f"- Recent quarterly velocity is uneven: {quarterly_rates} reviews/mo. "
+                    f"The {max_q:.0f}/mo spike vs {min_q:.0f}/mo baseline suggests a burst of reviews "
+                    f"that doesn't match organic purchasing patterns."
+                )
+            else:
+                st.markdown(
+                    f"- Recent quarterly velocity is relatively steady: {quarterly_rates} reviews/mo. "
+                    f"Consistent flow suggests organic customer purchases."
+                )
+
+        st.markdown(
+            f"- **Bottom line:** The current {current_rating}★ rating is credible — it reflects what's left "
+            f"*after* Amazon scrubbed the suspicious reviews. But the purge history means this listing "
+            f"has a track record of aggressive review acquisition."
+            if total_removed > 100 else
+            f"- **Bottom line:** The current {current_rating}★ rating at {current_reviews:,} reviews "
+            f"appears to be built on organic customer activity."
+        )
+
     c1, c2 = st.columns(2)
     with c1:
-        nav_link("→ Wallaroo Notable Events", "Wallaroo Wallets", key="meth2_wal")
+        nav_link("→ See Wallaroo review count chart & purge events", "Wallaroo Wallets", key="meth_integrity_wal")
     with c2:
-        nav_link("→ TeacherFav Notable Events", "TeacherFav", key="meth2_tf")
+        nav_link("→ See TeacherFav review count chart & purge events", "TeacherFav", key="meth_integrity_tf")
+
     st.markdown("""
-
-**What we don't have:**
-- No seller identity tracking — we can't detect if the seller behind the listing changed (listing hijack)
-- No correlation between rating drops and price changes — you have to manually cross-reference the two tables
-- No review text/sentiment analysis — we can't distinguish "quality got worse" from "shipping was slow" from a rating number alone
-
-#### 3. Spots review manipulation
-Sudden spikes in review volume (especially 5★ clusters) indicate paid reviews or giveaway campaigns. Healthy products accumulate reviews smoothly.
-
-**Where this is answered:**
-- **Executive Summary → Reviews/Mo Distribution box plot**: Shows whether review velocity is steady (tight box) or spiky (wide box with outliers) — spiky = suspicious
-- **Executive Summary → Review Frequency line chart**: Visual time-series of reviews/month — organic growth looks smooth, manipulation shows as sharp spikes
-- **[Business] page → Notable Events → Review Changes table**: Flags individual surge events ("Unusually high number of new reviews in a short period")
-- **[Business] page → Review Integrity Assessment** (in expander): Quarterly growth consistency check — flags if any quarter's growth > 2× the average
+**What we can't answer with this data:**
+- Whether the purged reviews were from the current owner or a previous owner
+- Whether the reviews were 5★ clusters (we only have total counts, not per-star breakdowns)
+- Whether review text sounds genuine or templated (no text analysis)
 """)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        nav_link("→ Executive Summary (box plot & frequency)", "Executive Summary", key="meth3_exec")
-    with c2:
-        nav_link("→ Wallaroo (events & integrity)", "Wallaroo Wallets", key="meth3_wal")
-    with c3:
-        nav_link("→ TeacherFav (events & integrity)", "TeacherFav", key="meth3_tf")
-    st.markdown("""
 
-**What we don't have:**
-- No star-rating breakdown per period — we can't detect "5★ clusters" specifically, only total review volume spikes
-- No review text analysis — can't check for generic/templated language typical of fake reviews
-- No reviewer profile analysis — can't detect if reviews come from suspicious accounts
+    # ── Question 2: Is demand still strong, or is this an old hit coasting on past reputation? ──
+    st.markdown("#### Is this product still selling, or is it coasting on old reviews?")
 
-#### 4. Distinguishes "old hit" from "current hit"
-Two products both at 4.5★/5,000 reviews look identical, but one might have gotten 90% of reviews 3 years ago and barely sells now.
+    for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
+        products = biz_data[biz_name]["products"]
+        bm = biz_data[biz_name]["metrics"]
+        main = products[0]
+        ch = main.get("review_count_history", [])
 
-**Where this is answered:**
-- **Executive Summary → Trend Table → Reviews column**: Shows reviews added and per-month rate for 6mo/1yr/2yr — directly reveals if growth is current or historical
-- **[Business] page → Review Growth KPI**: Reviews/month rate for the main product
-- **[Business] page → Rating Trend KPI**: ACCELERATING / DECELERATING label
-- **Executive Summary → Review Frequency line chart**: Visual time-series makes it immediately obvious if the product is still gaining reviews or flatlined years ago
-- **[Evaluation] page → AI commentary**: Explicitly calls out when review acquisition has dropped below peak levels
-- **[Yearly Breakdown] page**: Year-by-year review additions show exactly when growth happened
-""")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        nav_link("→ Executive Summary", "Executive Summary", key="meth4_exec")
-    with c2:
-        nav_link("→ Wallaroo Evaluation", "Wallaroo — Evaluation", key="meth4_wal_eval")
-    with c3:
-        nav_link("→ TeacherFav Evaluation", "TeacherFav — Evaluation", key="meth4_tf_eval")
-    with c4:
-        nav_link("→ Yearly Breakdowns", "Wallaroo — Yearly Breakdown", key="meth4_yearly")
-    st.markdown("""
+        # Get 6mo, 1yr, 2yr velocity
+        velocities = {}
+        if ch and len(ch) >= 2:
+            last_dt = datetime.fromisoformat(ch[-1]["date"])
+            last_count = ch[-1]["count"]
+            for months_val, lbl in [(6, "6mo"), (12, "1yr"), (24, "2yr")]:
+                cutoff_ts = last_dt.timestamp() - months_val * 30.44 * 86400
+                past = [c for c in ch if datetime.fromisoformat(c["date"]).timestamp() <= cutoff_ts]
+                if past:
+                    ref = past[-1]
+                    added = last_count - ref["count"]
+                    days = (last_dt - datetime.fromisoformat(ref["date"])).days
+                    velocities[lbl] = round(added / max(1, days / 30.44), 1)
 
-#### 5. Review removals are a signal
-Amazon mass-purging reviews (visible as drops in review count charts) indicates past manipulation. This is valuable due diligence data.
+        current_reviews = ch[-1]["count"] if ch else main.get("shared_reviews", 0)
 
-**Where this is answered:**
-- **[Business] page → Review Count chart**: Cumulative line chart — drops are visually obvious as downward steps. Caption: "Drops indicate reviews removed by Amazon"
-- **[Business] page → Notable Events → Review Changes table**: Every purge event listed with date, size, and note "Amazon removed reviews — past review manipulation flagged"
-- **[Business] page → Review Integrity Assessment**: Counts total purge events and total reviews removed; flags products with >100 removed
-- **[Business] page → Price + Review overlay chart**: Green bars show monthly review additions with purge months excluded — lets you see the "clean" growth rate
-""")
+        st.markdown(f"**{biz_name}** — main product ({current_reviews:,} reviews)")
+
+        if velocities:
+            v6 = velocities.get("6mo")
+            v1y = velocities.get("1yr")
+            v2y = velocities.get("2yr")
+            st.markdown(f"- Review velocity: **{v6}/mo** (last 6mo) · {v1y}/mo (1yr) · {v2y}/mo (2yr)")
+
+            if v6 is not None and v2y is not None and v2y > 0:
+                ratio = v6 / v2y
+                if ratio < 0.5:
+                    st.markdown(
+                        f"- Recent velocity ({v6}/mo) is **less than half** the 2-year average ({v2y}/mo). "
+                        f"This product is decelerating — fewer customers are buying it now than in prior years."
+                    )
+                elif ratio < 0.8:
+                    st.markdown(
+                        f"- Recent velocity ({v6}/mo) is below the 2-year average ({v2y}/mo). "
+                        f"Growth is slowing, though the product is still generating meaningful reviews."
+                    )
+                elif ratio > 1.5:
+                    st.markdown(
+                        f"- Recent velocity ({v6}/mo) is **above** the 2-year average ({v2y}/mo). "
+                        f"This product is accelerating — demand is growing."
+                    )
+                else:
+                    st.markdown(
+                        f"- Recent velocity ({v6}/mo) is roughly in line with the 2-year average ({v2y}/mo). "
+                        f"Steady demand."
+                    )
+
     c1, c2 = st.columns(2)
     with c1:
-        nav_link("→ Wallaroo (review count chart & events)", "Wallaroo Wallets", key="meth5_wal")
+        nav_link("→ See Wallaroo trend charts & velocity", "Executive Summary", key="meth_velocity_exec")
     with c2:
-        nav_link("→ TeacherFav (review count chart & events)", "TeacherFav", key="meth5_tf")
-    st.markdown("""
+        nav_link("→ See yearly breakdown", "Wallaroo — Yearly Breakdown", key="meth_velocity_yearly")
 
-**What we don't have:**
-- No breakdown of purge severity — a single removal of 5 reviews vs. a mass purge of 680 reviews are both flagged, but the severity implications are very different
-- No correlation with Amazon policy changes — some purges are platform-wide sweeps (less concerning) vs. targeted enforcement (more concerning)
+    st.markdown("""
+**What we can't answer with this data:**
+- Actual unit sales or revenue (reviews are a proxy — typically 1-5% of buyers leave a review)
+- Whether the deceleration is category-wide or specific to this product
+- Whether the seller has shifted ad spend or strategy recently
 
 ---
 
@@ -3135,7 +3197,7 @@ def main():
     elif page == "Wallaroo — Seller Conversation":
         page_seller_conversation()
     elif page == "Methodology & Definitions":
-        page_methodology()
+        page_methodology(biz_data)
 
 
 if __name__ == "__main__":
