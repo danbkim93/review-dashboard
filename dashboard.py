@@ -25,8 +25,6 @@ PAGE_NAMES = [
     "TeacherFav",
     "Wallaroo — Evaluation",
     "TeacherFav — Evaluation",
-    "Wallaroo — Yearly Breakdown",
-    "TeacherFav — Yearly Breakdown",
     "Wallaroo — Seller Conversation",
     "Methodology & Definitions",
 ]
@@ -41,6 +39,11 @@ def nav_link(label, target_page, key):
 BIZ_COLORS = {
     "Wallaroo Wallets": {"primary": "#2c3e50", "accent": "#3498db"},
     "TeacherFav": {"primary": "#c0392b", "accent": "#e74c3c"},
+}
+
+BIZ_CATEGORY = {
+    "Wallaroo Wallets": "Cell Phones & Accessories",
+    "TeacherFav": "Home & Kitchen",
 }
 
 PRODUCT_COLORS = [
@@ -374,6 +377,27 @@ def short_title(title, max_len=80):
     if not title:
         return "Unknown"
     return title[:max_len] + "..." if len(title) > max_len else title
+
+
+def _rating_freshness_note(product):
+    """Return (is_stale, message) if rating data is significantly older than review data."""
+    rh = product.get("rating_history", [])
+    ch = product.get("review_count_history", [])
+    if not rh or not ch:
+        return False, ""
+    last_rating_date = rh[-1]["date"][:10]
+    last_review_date = ch[-1]["date"][:10]
+    gap_days = (datetime.fromisoformat(last_review_date) - datetime.fromisoformat(last_rating_date)).days
+    if gap_days > 180:
+        last_rating = rh[-1]["rating"]
+        return True, (
+            f"ℹ️ Rating data last updated {last_rating_date} "
+            f"({gap_days // 30}mo ago). "
+            f"Keepa only records a new data point when the rating changes — "
+            f"rating has been {last_rating:.1f} since then. "
+            f"This is expected behavior, not missing data."
+        )
+    return False, ""
 
 
 # ─── Chart Helpers ──────────────────────────────────────────────────────────
@@ -1114,7 +1138,7 @@ def _analyze_price(product):
     return f"{trend}.{stake}"
 
 
-def _analyze_sales_rank(products):
+def _analyze_sales_rank(products, biz_name=""):
     """Generate AI analysis for a sales rank chart."""
     summaries = []
     for p in products:
@@ -1152,9 +1176,11 @@ def _analyze_sales_rank(products):
         return None
     worsening = [s for s in summaries if "+%" in s or "worsening" in s.lower()]
     if any("+" in s.split("vs")[0] for s in summaries if "vs" in s):
-        stake = " Higher rank number = fewer daily sales compared to other products in the same category."
+        cat = BIZ_CATEGORY.get(biz_name, "the same category")
+        stake = f" Higher rank number = fewer daily sales compared to other products in '{cat}'."
     else:
-        stake = " Lower rank number = more daily sales compared to others in the category."
+        cat = BIZ_CATEGORY.get(biz_name, "the same category")
+        stake = f" Lower rank number = more daily sales compared to others in '{cat}'."
     return "; ".join(summaries) + "." + stake
 
 
@@ -1287,7 +1313,7 @@ def detect_price_spikes(ph, threshold=0.20):
     return spikes
 
 
-def make_sales_rank_chart(products, title, zoomed=False):
+def make_sales_rank_chart(products, title, zoomed=False, biz_name=""):
     fig = go.Figure()
     all_ranks = []
     for i, p in enumerate(products):
@@ -1337,7 +1363,8 @@ def make_sales_rank_chart(products, title, zoomed=False):
         for y0, y1, label, color in rank_bands:
             fig.add_hrect(y0=y0, y1=y1, fillcolor=color, line_width=0)
         yaxis_config = dict(autorange="reversed")
-        subtitle = "Sales rank shows how this product's sales compare to every other product in the same Amazon category.<br>Rank #1 sells the most. Rank 100,000 means 99,999 products sell more."
+        cat = BIZ_CATEGORY.get(biz_name, "the same Amazon category")
+        subtitle = f"Sales rank shows how this product's sales compare to every other product in Amazon's '{cat}' category.<br>Rank #1 sells the most. Rank 100,000 means 99,999 products sell more."
 
     fig.update_layout(
         title=dict(text=f"{title}<br><sup>{subtitle}</sup>"),
@@ -1455,7 +1482,8 @@ def page_executive_summary(biz_data):
                         x=names, y=reviews,
                         marker_color="#636EFA",
                         text=[f"{v:,}" for v in reviews],
-                        textposition="auto",
+                        textposition="inside",
+                        textfont=dict(color="white"),
                     ))
                     fig_rev_dist.update_layout(
                         title="Reviews by Product", height=280,
@@ -1470,7 +1498,8 @@ def page_executive_summary(biz_data):
                         x=names, y=ratings_vals,
                         marker_color=["#00d4aa" if v >= 4.0 else "#ff6b6b" if v > 0 else "#555" for v in ratings_vals],
                         text=[f"{v:.1f}" if v > 0 else "—" for v in ratings_vals],
-                        textposition="auto",
+                        textposition="inside",
+                        textfont=dict(color="white"),
                     ))
                     fig_rat_dist.update_layout(
                         title="Rating by Product", height=280,
@@ -1507,7 +1536,7 @@ def page_executive_summary(biz_data):
             short_title(w["main_title"], 50),
             f"{w['main_reviews']:,}",
             f"{w['rating_periods']['1yr']['from_rating']:.1f} → {w['rating_periods']['1yr']['to_rating']:.1f} ({w['rating_periods']['1yr']['delta']:+.2f}, {w['rating_periods']['1yr']['from_month']} → now)" if '1yr' in w.get('rating_periods', {}) else f"{w['main_r_dir']} ({w['main_early_r']:.1f} -> {w['main_recent_r']:.1f})",
-            f"{w['main_growth_per_mo']:.1f} reviews/mo",
+            f"{w['review_periods']['1yr']['per_month']:.1f} reviews/mo (1yr)" if '1yr' in w.get('review_periods', {}) else f"{w['main_growth_per_mo']:.1f} reviews/mo (full history)",
             f"{w['review_periods']['1yr']['per_month']:.1f}/mo (1yr) vs {w['review_periods']['2yr']['per_month']:.1f}/mo (2yr) — {'slowing' if w['review_periods']['1yr']['per_month'] < w['review_periods']['2yr']['per_month'] * 0.9 else 'accelerating' if w['review_periods']['1yr']['per_month'] > w['review_periods']['2yr']['per_month'] * 1.1 else 'steady'}" if '1yr' in w.get('review_periods', {}) and '2yr' in w.get('review_periods', {}) else f"{w['growth_dir']} (early {w['early_growth_mo']:.1f} -> recent {w['recent_growth_mo']:.1f} reviews/mo)",
             f"{w['main_first_date']} to {w['main_last_date']}",
             "Keepa API (complete)",
@@ -1519,7 +1548,7 @@ def page_executive_summary(biz_data):
             short_title(t["main_title"], 50),
             f"{t['main_reviews']:,}",
             f"{t['rating_periods']['1yr']['from_rating']:.1f} → {t['rating_periods']['1yr']['to_rating']:.1f} ({t['rating_periods']['1yr']['delta']:+.2f}, {t['rating_periods']['1yr']['from_month']} → now)" if '1yr' in t.get('rating_periods', {}) else f"{t['main_r_dir']} ({t['main_early_r']:.1f} -> {t['main_recent_r']:.1f})",
-            f"{t['main_growth_per_mo']:.1f} reviews/mo",
+            f"{t['review_periods']['1yr']['per_month']:.1f} reviews/mo (1yr)" if '1yr' in t.get('review_periods', {}) else f"{t['main_growth_per_mo']:.1f} reviews/mo (full history)",
             f"{t['review_periods']['1yr']['per_month']:.1f}/mo (1yr) vs {t['review_periods']['2yr']['per_month']:.1f}/mo (2yr) — {'slowing' if t['review_periods']['1yr']['per_month'] < t['review_periods']['2yr']['per_month'] * 0.9 else 'accelerating' if t['review_periods']['1yr']['per_month'] > t['review_periods']['2yr']['per_month'] * 1.1 else 'steady'}" if '1yr' in t.get('review_periods', {}) and '2yr' in t.get('review_periods', {}) else f"{t['growth_dir']} (early {t['early_growth_mo']:.1f} -> recent {t['recent_growth_mo']:.1f} reviews/mo)",
             f"{t['main_first_date']} to {t['main_last_date']}",
             "Keepa API (complete)",
@@ -1527,97 +1556,26 @@ def page_executive_summary(biz_data):
     }
     st.dataframe(pd.DataFrame(table_data).set_index("Metric"), use_container_width=True)
 
-    # Recent Trends comparison table
+    # Recent Trends — compact summary with link to Evaluation pages
     st.divider()
-    st.markdown("#### Recent Trends (Main Product)")
-    st.caption("Rating, review growth, and sales rank for the main product over 6 months, 1 year, and 2 years. "
-               "Sales rank: lower number = more sales; negative % = rank improved.")
-    nav_link("📐 Why we track trends → Methodology", "Methodology & Definitions", key="nav_trends_meth")
-    today = date.today()
-    period_months = {"6mo": 6, "1yr": 12, "2yr": 24}
+    st.markdown("#### Recent Trends")
     for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
-        st.markdown(f"**{biz_name}**")
         bm = biz_data[biz_name]["metrics"]
-        prods = biz_data[biz_name]["products"]
-        main_prod = max(prods, key=lambda p: p.get("reviewCount", 0)) if prods else None
-        ch_raw = main_prod.get("review_count_history", []) if main_prod else []
-        rh_raw = main_prod.get("rating_history", []) if main_prod else []
-        rank_data = main_prod.get("monthly_avg_rank", {}) if main_prod else {}
-        trend_rows = []
-        for label in ["6mo", "1yr", "2yr"]:
-            mo = period_months[label]
-            start = today - relativedelta(months=mo)
-            prior_start = today - relativedelta(months=mo * 2)
-            row = {"Period": f"Last {label} ({start.strftime('%Y-%m')} → {today.strftime('%Y-%m')})"}
-
-            # Rating: recent delta vs prior-period delta
-            if label in bm.get("rating_periods", {}):
-                rp = bm["rating_periods"][label]
-                rating_str = f"{rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({rp['delta']:+.2f})"
-                # Compute prior-period rating delta
-                if rh_raw:
-                    rh_dates = [(r["date"], r["rating"]) for r in rh_raw]
-                    cutoff_iso = start.isoformat()
-                    prior_start_iso = prior_start.isoformat()
-                    prior_ratings = [r for d, r in rh_dates if prior_start_iso <= d <= cutoff_iso]
-                    pre_prior = [r for d, r in rh_dates if d <= prior_start_iso]
-                    if prior_ratings and pre_prior:
-                        prior_delta = round(prior_ratings[-1] - pre_prior[-1], 2)
-                        diff = rp['delta'] - prior_delta
-                        rating_str += f" · prior {label}: {prior_delta:+.2f}, Δ{diff:+.2f}"
-                row["Rating"] = rating_str
-            else:
-                row["Rating"] = "—"
-
-            # Reviews: recent per_month vs prior-period per_month
-            if label in bm.get("review_periods", {}):
-                rvp = bm["review_periods"][label]
-                rev_str = f"+{rvp['added']:,} ({rvp['per_month']:.1f}/mo)"
-                # Compute prior-period reviews/mo
-                if ch_raw and len(ch_raw) >= 2:
-                    cutoff_dt = datetime.fromisoformat(ch_raw[-1]["date"]) - timedelta(days=mo * 30.44)
-                    past_at_cutoff = [c for c in ch_raw if c["date"] <= cutoff_dt.isoformat()]
-                    if past_at_cutoff:
-                        anchor = past_at_cutoff[-1]
-                        prior_cutoff_dt = datetime.fromisoformat(anchor["date"]) - timedelta(days=mo * 30.44)
-                        prior_past = [c for c in ch_raw if c["date"] <= prior_cutoff_dt.isoformat()]
-                        if prior_past:
-                            ref = prior_past[-1]
-                            added_prior = anchor["count"] - ref["count"]
-                            span_prior = max(1, (datetime.fromisoformat(anchor["date"]) - datetime.fromisoformat(ref["date"])).days / 30.44)
-                            prior_pm = round(added_prior / span_prior, 1)
-                            diff_pm = round(rvp['per_month'] - prior_pm, 1)
-                            rev_str += f" · prior {label}: {prior_pm}/mo, {diff_pm:+.1f}"
-                row["Reviews"] = rev_str
-            else:
-                row["Reviews"] = "—"
-
-            # Sales Rank: recent pct_change vs prior-period pct_change
-            if label in bm.get("main_rank_periods", {}):
-                srp = bm["main_rank_periods"][label]
-                rank_str = f"#{srp['from_rank']:,.0f} → #{srp['to_rank']:,.0f} ({srp['pct_change']:+.0f}%)"
-                # Compute prior-period rank change
-                if rank_data and len(rank_data) >= 2:
-                    rank_months_sorted = sorted(rank_data.keys())
-                    cutoff_ym = start.strftime("%Y-%m")
-                    prior_start_ym = prior_start.strftime("%Y-%m")
-                    end_months = [m for m in rank_months_sorted if m <= cutoff_ym]
-                    start_months = [m for m in rank_months_sorted if m <= prior_start_ym]
-                    if end_months and start_months:
-                        prior_end_rank = rank_data[end_months[-1]]
-                        prior_start_rank = rank_data[start_months[-1]]
-                        if prior_start_rank > 0:
-                            prior_pct = round((prior_end_rank - prior_start_rank) / prior_start_rank * 100)
-                            diff_pct = round(srp['pct_change'] - prior_pct)
-                            rank_str += f" · prior {label}: {prior_pct:+.0f}%, Δ{diff_pct:+.0f}pp"
-                row["Sales Rank"] = rank_str
-            else:
-                row["Sales Rank"] = "—"
-            trend_rows.append(row)
-        if trend_rows:
-            st.dataframe(pd.DataFrame(trend_rows), use_container_width=True, hide_index=True)
+        parts = []
+        if "1yr" in bm.get("review_periods", {}):
+            rp = bm["review_periods"]["1yr"]
+            parts.append(f"~{rp['per_month']:.0f} reviews/mo (1yr)")
+        if "1yr" in bm.get("rating_periods", {}):
+            rd = bm["rating_periods"]["1yr"]
+            parts.append(f"rating {rd['from_rating']:.1f}\u2192{rd['to_rating']:.1f}")
+        if bm.get("main_rank_recent"):
+            parts.append(f"rank #{bm['main_rank_recent']:,.0f}")
+        summary_line = ' \u00b7 '.join(parts)
+        st.markdown(f"**{biz_name}:** {summary_line}")
+    nav_link("📊 Full 6mo/1yr/2yr trends \u2192 Evaluation pages", "Wallaroo — Evaluation", key="nav_trends_eval")
 
     # Trend charts — highlighted line charts for each time window
+    today = date.today()
     st.markdown("#### Trend Charts (Main Product)")
     st.caption("Full time-series with the recent window highlighted. "
                "Annotations compare the recent window against the equivalent prior period.")
@@ -1659,6 +1617,9 @@ def page_executive_summary(biz_data):
         cutoff_str = cutoff.strftime("%Y-%m")
         today_str = pd.Timestamp(today).strftime("%Y-%m")
         st.markdown(f"**{biz_name}** — Last {label} ({cutoff_str} → {today_str})")
+        _stale, _stale_msg = _rating_freshness_note(main)
+        if _stale:
+            st.caption(_stale_msg)
 
         # Compute comparison stats
         # Rating: mean in recent vs prior equivalent window
@@ -1808,7 +1769,8 @@ def page_executive_summary(biz_data):
                     y=[r_highlighted_avg, r_rest_avg],
                     marker_color=["#EF553B", "#636EFA"],
                     text=[f"{v}" if v is not None else "" for v in [r_highlighted_avg, r_rest_avg]],
-                    textposition="auto",
+                    textposition="inside",
+                    textfont=dict(color="white"),
                 ))
                 fig_rb.update_layout(
                     title=f"Avg Rating (mean over {label})", height=220,
@@ -1874,32 +1836,7 @@ def page_executive_summary(biz_data):
         "• **Recent** = the selected time window ending today. **Prior** = the same-length window immediately before it."
     )
 
-    with st.expander("Metric Definitions, Review Integrity & Date Range Impact", expanded=False):
-        for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
-            m = biz_data[biz_name]["metrics"]
-            integrity = compute_integrity_signals(biz_data[biz_name]["products"])
-            flagged = [s for s in integrity if not s["looks_organic"]]
-
-            st.markdown(f"**{biz_name}**")
-            st.markdown(
-                f"Data covers {m['main_first_date']} to {m['main_last_date']} (main product). "
-                f"Review growth is {m['main_growth_per_mo']:.1f} reviews/mo — "
-                f"{'this is a high rate of new reviews for the category.' if m['main_growth_per_mo'] > 30 else 'a moderate rate of new reviews.'}"
-            )
-            if not flagged:
-                st.markdown(f"No manipulation signals detected across {len(integrity)} products. Review growth looks organic.")
-            else:
-                for s in flagged:
-                    st.markdown(f"- **{s['name']}**: {'; '.join(s['red_flags'])}")
-            st.markdown("")
-
-        st.markdown("""
-**Reading the comparison table:**
-- **Weighted Avg Rating** — products with more reviews have more weight. A 4.6 product with 7,000 reviews dominates over a 3.4 product with 16 reviews.
-- **Rating Trend** — STABLE/IMPROVING/DECLINING compares first half vs second half of the data. The numbers in parentheses show the actual average shift.
-- **Review Growth Direction** — ACCELERATING means the product is gaining reviews faster recently; DECELERATING means it's slowing down.
-- **Data Range** — the full period covered by Keepa data for the main product.
-""")
+    nav_link("📐 Metric definitions & review integrity \u2192 Methodology", "Methodology & Definitions", key="nav_meth_exec_bottom")
 
 
 def page_business_analysis(biz_data, biz_name):
@@ -1915,7 +1852,8 @@ def page_business_analysis(biz_data, biz_name):
     cols[0].metric("Products", f"{metrics['n_products']} ({metrics['n_variations']} var)")
     cols[1].metric("Total Reviews", f"{metrics['total_reviews']:,}")
     cols[2].metric("Avg Rating", f"{metrics['weighted_avg_rating']:.1f}" if metrics["weighted_avg_rating"] else "?")
-    cols[3].metric("Review Growth (reviews/mo)", f"{metrics['main_growth_per_mo']:.1f}")
+    _kpi_rate = metrics["review_periods"]["1yr"]["per_month"] if "1yr" in metrics.get("review_periods", {}) else metrics["review_periods"].get("6mo", {}).get("per_month", metrics["main_growth_per_mo"])
+    cols[3].metric("Review Growth (reviews/mo, 1yr)", f"{_kpi_rate:.1f}")
     cols[4].metric("Rating Trend", metrics["main_r_dir"])
     if metrics["main_rank_recent"] is not None:
         current_rank = metrics["main_rank_recent"]
@@ -1937,7 +1875,8 @@ def page_business_analysis(biz_data, biz_name):
         else:
             cols[5].metric("Main Product Sales Rank", f"#{current_rank:,.0f}")
         # Factual explanation: what the number means and direction
-        explanation = f"#{current_rank:,.0f} means {current_rank - 1:,.0f} products in this category sell more."
+        category = BIZ_CATEGORY.get(biz_name, "this category")
+        explanation = f"#{current_rank:,.0f} means {current_rank - 1:,.0f} products in the '{category}' category sell more."
         if rank_delta_text and compare_period:
             p = rank_periods[compare_period]
             from_rank = p["from_rank"]
@@ -1968,7 +1907,7 @@ def page_business_analysis(biz_data, biz_name):
 - **Avg Rating** — weighted average rating across all products, weighted by review count (so a product with 7,000 reviews matters more than one with 100).
 - **Review Growth** — how many new reviews the main product gains per month on average. Higher = more customers buying.
 - **Rating Trend** — compares the average rating in the first half vs second half of the data. STABLE means quality hasn't changed; DECLINING means recent ratings are lower.
-- **Main Product Sales Rank** — where the main product ranks in sales compared to every other product in the same Amazon category. Lower number = more sales. For example, rank 3,000 means only 2,999 products sell more in that category.
+- **Main Product Sales Rank** — where the main product ranks in sales compared to every other product in the Amazon '{BIZ_CATEGORY.get(biz_name, "same")}' category. Lower number = more sales. For example, rank 3,000 means only 2,999 products sell more in that category.
 
 **Review Integrity Assessment**
 """)
@@ -1992,7 +1931,7 @@ def page_business_analysis(biz_data, biz_name):
 Changing the date range in the sidebar recalculates everything on this page. Narrowing to the last 1-2 years isolates recent performance — useful for spotting if a once-strong product is now declining. The full range gives the historical average, which smooths out short-term noise but can hide recent trends.
 """)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Main Product", "Portfolio", "All Products", "Product Table"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Main Product Deep Dive", "Portfolio", "All Products", "Product Table"])
 
     # ─── 1. Main Product Only ───
     with tab1:
@@ -2015,27 +1954,12 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
             st.caption(f"Review flags: {'; '.join(main_sig['red_flags'])}")
         else:
             st.caption("Review integrity: No manipulation signals detected — steady growth, no Amazon purges.")
+        _stale, _stale_msg = _rating_freshness_note(main)
+        if _stale:
+            st.info(_stale_msg)
         nav_link("📐 What review drops & spikes mean → Methodology", "Methodology & Definitions", key=f"nav_charts_meth_{biz_name}")
 
-        fig = make_rating_chart(
-            [main],
-            f"Rating History — {product_name(main, short=True)}",
-            colors=["#00d4aa"],
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        analysis = _analyze_rating([main])
-        if analysis:
-            _ai_caption(analysis)
-
-        fig = make_review_count_chart(
-            [main],
-            f"Review Count Growth — {product_name(main, short=True)}",
-            colors=["#00d4aa"],
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        analysis = _analyze_review_count([main])
-        if analysis:
-            _ai_caption(analysis)
+        st.caption("Rating and review count history charts are on the **All Products** tab (includes multi-product overlay).")
 
         # Price history chart
         if main.get("marketplace_price_history"):
@@ -2116,11 +2040,11 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
         # Sales rank chart for main product
         rank_data = main.get("monthly_avg_rank", {})
         if rank_data and len(rank_data) >= 2:
-            fig_rank = make_sales_rank_chart([main], f"Sales Rank — {product_name(main, short=True)}")
+            fig_rank = make_sales_rank_chart([main], f"Sales Rank — {product_name(main, short=True)}", biz_name=biz_name)
             st.plotly_chart(fig_rank, use_container_width=True)
-            fig_rank_zoom = make_sales_rank_chart([main], f"Sales Rank (Zoomed In) — {product_name(main, short=True)}", zoomed=True)
+            fig_rank_zoom = make_sales_rank_chart([main], f"Sales Rank (Zoomed In) — {product_name(main, short=True)}", zoomed=True, biz_name=biz_name)
             st.plotly_chart(fig_rank_zoom, use_container_width=True)
-            analysis = _analyze_sales_rank([main])
+            analysis = _analyze_sales_rank([main], biz_name=biz_name)
             if analysis:
                 _ai_caption(analysis)
 
@@ -2167,11 +2091,11 @@ Changing the date range in the sidebar recalculates everything on this page. Nar
             _ai_caption(analysis)
 
         # Sales rank
-        fig = make_sales_rank_chart(products, f"{biz_name} — Monthly Avg Sales Rank")
+        fig = make_sales_rank_chart(products, f"{biz_name} — Monthly Avg Sales Rank", biz_name=biz_name)
         st.plotly_chart(fig, use_container_width=True)
-        fig_zoom = make_sales_rank_chart(products, f"{biz_name} — Monthly Avg Sales Rank (Zoomed In)", zoomed=True)
+        fig_zoom = make_sales_rank_chart(products, f"{biz_name} — Monthly Avg Sales Rank (Zoomed In)", zoomed=True, biz_name=biz_name)
         st.plotly_chart(fig_zoom, use_container_width=True)
-        analysis = _analyze_sales_rank(products)
+        analysis = _analyze_sales_rank(products, biz_name=biz_name)
         if analysis:
             _ai_caption(analysis)
 
@@ -2299,6 +2223,9 @@ def page_evaluation(biz_data, biz_name):
             f"(main product: {product_name(main, short=True)}). "
             f"Adjust the date range in the sidebar to change the evaluation window."
         )
+    _stale, _stale_msg = _rating_freshness_note(main)
+    if _stale:
+        st.info(_stale_msg)
 
     if biz_name == "Wallaroo Wallets":
         st.markdown(
@@ -2329,9 +2256,11 @@ def page_evaluation(biz_data, biz_name):
                 direction = "improved"
             else:
                 direction = "worsened"
+            category = BIZ_CATEGORY.get(biz_name, "the category")
             text = (
-                f"Main product sales rank {direction}: ~{p['from_rank']:,.0f} → ~{p['to_rank']:,.0f} "
-                f"({pct:+.0f}%) over the last {label} ({p['from_month']} to {metrics['main_rank_recent_month']})"
+                f"The main product's sales rank in the '{category}' category {direction} from about {p['from_rank']:,.0f} to about {p['to_rank']:,.0f} "
+                f"({pct:+.0f}%) over the last {label} ({p['from_month']} to {metrics['main_rank_recent_month']}). "
+                f"{'A higher number means fewer sales.' if direction == 'worsened' else 'A lower number means more sales.'}"
             )
             if direction == "improved":
                 pros.append(text)
@@ -2353,9 +2282,10 @@ def page_evaluation(biz_data, biz_name):
                 pct = p["pct_change"]
                 parts.append(f"{pct:+.0f}% vs {label} ago (was ~{p['from_rank']:,.0f})")
         rank_context = "; ".join(parts) if parts else "no prior data to compare"
+        category = BIZ_CATEGORY.get(biz_name, "the category")
         return (
-            f" Sales rank is currently #{current:,.0f} ({rank_context}). "
-            f"This means {current - 1:,.0f} products in the category sell more."
+            f" Sales rank in the '{category}' category is currently #{current:,.0f} ({rank_context}). "
+            f"This means {current - 1:,.0f} products in '{category}' sell more."
         )
 
     def _rating_trend_bullets(metrics):
@@ -2368,7 +2298,7 @@ def page_evaluation(biz_data, biz_name):
             delta = rp["delta"]
             if abs(delta) < 0.05:
                 continue  # not notable
-            text = f"Rating {rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({delta:+.2f}) over last {label} ({rp['from_month']} to now)"
+            text = f"The star rating changed from {rp['from_rating']:.1f} to {rp['to_rating']:.1f} ({delta:+.2f}) over the last {label} (since {rp['from_month']})."
             if delta > 0.1:
                 pros.append(text)
             elif delta < -0.1:
@@ -2385,11 +2315,11 @@ def page_evaluation(biz_data, biz_name):
             longer_rate = periods["2yr"]["per_month"]
             if recent_rate < longer_rate * 0.7:
                 cons.append(
-                    f"Review growth slowing: {recent_rate:.0f} reviews/mo over last 1yr vs {longer_rate:.0f}/mo over last 2yr — fewer new customers"
+                    f"New reviews are slowing down. Over the last year, the product averaged {recent_rate:.0f} new reviews per month, compared to {longer_rate:.0f} per month over the last 2 years. This suggests fewer new customers."
                 )
             elif recent_rate > longer_rate * 1.3:
                 pros.append(
-                    f"Review growth accelerating: {recent_rate:.0f} reviews/mo over last 1yr vs {longer_rate:.0f}/mo over last 2yr — more new customers"
+                    f"New reviews are speeding up. Over the last year, the product averaged {recent_rate:.0f} new reviews per month, compared to {longer_rate:.0f} per month over the last 2 years. This suggests more new customers."
                 )
         # Show 6mo rate if notably different from 1yr
         if "6mo" in periods and "1yr" in periods:
@@ -2397,11 +2327,11 @@ def page_evaluation(biz_data, biz_name):
             rate_1yr = periods["1yr"]["per_month"]
             if rate_6mo < rate_1yr * 0.7:
                 cons.append(
-                    f"Recent slowdown: {rate_6mo:.0f} reviews/mo over last 6mo vs {rate_1yr:.0f}/mo over last 1yr"
+                    f"The most recent 6 months show only {rate_6mo:.0f} new reviews per month, compared to {rate_1yr:.0f} per month over the full last year. Sales may be slowing down recently."
                 )
             elif rate_6mo > rate_1yr * 1.3:
                 pros.append(
-                    f"Recent acceleration: {rate_6mo:.0f} reviews/mo over last 6mo vs {rate_1yr:.0f}/mo over last 1yr"
+                    f"The most recent 6 months show {rate_6mo:.0f} new reviews per month, compared to {rate_1yr:.0f} per month over the full last year. Sales appear to be picking up recently."
                 )
         return pros, cons
 
@@ -2411,10 +2341,20 @@ def page_evaluation(biz_data, biz_name):
         rank_pros, rank_cons = _rank_bullets(m)
         rating_pros, rating_cons = _rating_trend_bullets(m)
         review_pros, review_cons = _review_trend_bullets(m)
+        # Use most recent period rate (1yr preferred, fallback to 6mo, then full-history)
+        _recent_rate = None
+        for _rp_label in ["1yr", "6mo"]:
+            if _rp_label in m.get("review_periods", {}):
+                _recent_rate = m["review_periods"][_rp_label]["per_month"]
+                _recent_rate_label = _rp_label
+                break
+        if _recent_rate is None:
+            _recent_rate = m["main_growth_per_mo"]
+            _recent_rate_label = "full history"
         pros = [
             f"10-year brand, 4.6 stars across {m['main_reviews']:,} reviews — exceptional longevity",
             f"Rating STABLE at 4.4-4.6 over full history — no quality degradation",
-            f"Main product growing at {m['main_growth_per_mo']:.0f} new reviews/month consistently",
+            f"Main product adding ~{_recent_rate:.0f} new reviews/month (last {_recent_rate_label})",
             f"{m['n_variations']} color variants from just {m['n_products']} products = efficient SKU strategy",
             "Ultra-low unit cost ($1.65-1.81) = massive tariff buffer",
             "Category leader in phone wallets — well-established with strong sales history",
@@ -2456,24 +2396,35 @@ def page_evaluation(biz_data, biz_name):
                 p_months = sorted(p_rank.keys())
                 p_early, p_recent = p_rank[p_months[0]], p_rank[p_months[-1]]
                 if p_recent > p_early * 3 and p_recent > 100_000:
+                    category = BIZ_CATEGORY.get(biz_name, "the category")
                     rank_cons_extra.append(
-                        f"{product_name(p, short=True)} sales rank went from ~{p_early:,.0f} to ~{p_recent:,.0f} "
-                        f"({p_months[0]} to {p_months[-1]}) — barely selling"
+                        f"{product_name(p, short=True)} went from a sales rank of about {p_early:,.0f} to about {p_recent:,.0f} "
+                        f"in the '{category}' category ({p_months[0]} to {p_months[-1]}). A rank this high means the product is barely selling."
                     )
+        # Use most recent period rate (1yr preferred, fallback to 6mo, then full-history)
+        _recent_rate = None
+        for _rp_label in ["1yr", "6mo"]:
+            if _rp_label in m.get("review_periods", {}):
+                _recent_rate = m["review_periods"][_rp_label]["per_month"]
+                _recent_rate_label = _rp_label
+                break
+        if _recent_rate is None:
+            _recent_rate = m["main_growth_per_mo"]
+            _recent_rate_label = "full history"
         pros = [
-            f"Core Sand Timer line at 4.4 stars with {products[0]['shared_reviews']:,} reviews — market leader",
-            f"Toothbrush Timer at 4.6 stars ({products[1]['shared_reviews']:,} reviews) — STRONGER than initially reported",
-            f"16 color variants of main timer = wide selection that's hard for new competitors to match",
-            "Listed on Empire Flippers (Listing #92221) — broker-verified listing",
-            f"Review growth at {m['main_growth_per_mo']:.0f} new reviews/month on main product — steady stream of new buyers",
-            "Two strong products (Sand Timer 4.4, Toothbrush Timer 4.6) — diversified within niche",
+            f"The main Sand Timer product has a 4.4-star rating with {products[0]['shared_reviews']:,} reviews, making it one of the top sellers in its category.",
+            f"The Toothbrush Timer has a 4.6-star rating with {products[1]['shared_reviews']:,} reviews, which is stronger than what the seller originally reported.",
+            "The main timer comes in 16 color options, which makes it harder for new competitors to match the full selection.",
+            "This business is listed on Empire Flippers (Listing #92221), meaning a broker has reviewed and verified it.",
+            f"The business is adding about {_recent_rate:.0f} new reviews per month over the last {_recent_rate_label}, which shows a steady flow of new customers.",
+            "There are two strong products (Sand Timer at 4.4 stars and Toothbrush Timer at 4.6 stars), so the business is not relying on just one item.",
         ] + rank_pros + rating_pros + review_pros
         cons = [
-            f"Rating trend slightly DOWN on main product ({m['main_early_r']:.1f} -> {m['main_recent_r']:.1f})",
-            f"60-Minute Timer at 3.4 stars (16 reviews) — worst performing product",
-            "Margin may be thin — verify cost structure and vulnerability to tariff/ad spend changes",
-            f"Review growth {m['growth_dir'].lower()} — early {m['early_growth_mo']:.0f} reviews/mo vs recent {m['recent_growth_mo']:.0f} reviews/mo",
-            f"Dashboard: FAILS age (<5yr) and multiple (>30x). 2 FAIL criteria on acquisition checklist",
+            f"The main product's star rating has gone down slightly, from {m['main_early_r']:.1f} to {m['main_recent_r']:.1f} stars.",
+            "The 60-Minute Timer is the weakest product, with only a 3.4-star rating and just 16 reviews.",
+            "Profit margins may be thin. You should verify the cost breakdown and check how rising tariffs or advertising costs could eat into profits.",
+            f"In the last 6 months, new reviews came in at {m['review_periods']['6mo']['per_month']:.0f} per month, compared to {m['review_periods']['1yr']['per_month']:.0f} per month over the last year. This suggests recent sales momentum is slowing down." if '6mo' in m.get('review_periods', {}) and '1yr' in m.get('review_periods', {}) and m['review_periods']['6mo']['per_month'] < m['review_periods']['1yr']['per_month'] * 0.8 else f"Review growth is {m['growth_dir'].lower()} when comparing the first half of its history to the second half.",
+            "This listing fails 2 of the acquisition checklist criteria: the business is less than 5 years old, and the asking price is more than 30 times monthly earnings.",
         ] + rank_cons + rank_cons_extra + rating_cons + review_cons
         questions = [
             "Can the 60-Minute Timer (3.4 stars) be discontinued or redesigned?",
@@ -2521,7 +2472,7 @@ def page_evaluation(biz_data, biz_name):
     st.caption(
         "How the main product's key metrics changed over the last 6 months, 1 year, and 2 years. "
         "Rating = star rating (out of 5). Reviews/mo = average new reviews added per month in that period. "
-        "Sales rank = position in category (lower = more sales; negative % change = rank improved)."
+        f"Sales rank = position in the '{BIZ_CATEGORY.get(biz_name, 'category')}' category (lower = more sales; negative % change = rank improved)."
     )
     trend_rows = []
     for label in ["6mo", "1yr", "2yr"]:
@@ -2549,6 +2500,10 @@ def page_evaluation(biz_data, biz_name):
         trend_rows.append(row)
     if trend_rows:
         st.dataframe(pd.DataFrame(trend_rows), use_container_width=True, hide_index=True)
+
+    st.divider()
+    with st.expander("Yearly Breakdown — Year-over-Year Analysis", expanded=False):
+        _render_yearly_breakdown(biz_data, biz_name)
 
 
 
@@ -2578,12 +2533,9 @@ def _period_summary(products, label, cutoff_iso):
 
 
 
-def page_yearly_breakdown(biz_data, biz_name):
-    """Static yearly breakdown showing rating and review trends year over year.
-    Static yearly breakdown showing rating and review trends year over year."""
+def _render_yearly_breakdown(biz_data, biz_name):
+    """Render yearly breakdown content (used as section within Evaluation page)."""
     products = biz_data[biz_name]["products"]
-    st.header(f"{biz_name} — Yearly Breakdown")
-    st.caption("Source: Keepa API (keepa.com) | Full historical data")
 
     # Product overview table
     overview_rows = []
@@ -2631,6 +2583,9 @@ def page_yearly_breakdown(biz_data, biz_name):
             else:
                 range_text += " | No rating data"
             st.caption(range_text)
+            _stale, _stale_msg = _rating_freshness_note(p)
+            if _stale:
+                st.info(_stale_msg)
 
         # Group data by year
         rating_by_year = {}
@@ -2714,7 +2669,8 @@ def page_yearly_breakdown(biz_data, biz_name):
                 y=chart_ratings,
                 marker_color=["#00d4aa" if r is not None and r >= 4.0 else "#ff6b6b" if r is not None else "#666" for r in chart_ratings],
                 text=[f"{r:.2f}" if r is not None else "" for r in chart_ratings],
-                textposition="outside",
+                textposition="inside",
+                textfont=dict(color="white"),
             ))
             fig_r.add_hline(y=4.0, line_dash="dot", line_color="green", opacity=0.4)
             fig_r.update_layout(
@@ -2753,7 +2709,8 @@ def page_yearly_breakdown(biz_data, biz_name):
                 y=[r if r is not None else 0 for r in chart_reviews],
                 marker_color=["#3498db" if r is not None and r >= 0 else "#ff6b6b" if r is not None else "#666" for r in chart_reviews],
                 text=[f"{r:,}" if r is not None else "" for r in chart_reviews],
-                textposition="outside",
+                textposition="inside",
+                textfont=dict(color="white"),
             ))
             fig_rev.update_layout(
                 title=dict(text=f"Net Reviews Added by Year — {product_name(p, short=True)}"),
@@ -3111,7 +3068,7 @@ We focus on the two questions that matter most for acquisition due diligence:
     with c1:
         nav_link("→ See Wallaroo trend charts & velocity", "Executive Summary", key="meth_velocity_exec")
     with c2:
-        nav_link("→ See yearly breakdown", "Wallaroo — Yearly Breakdown", key="meth_velocity_yearly")
+        nav_link("→ See yearly breakdown", "Wallaroo — Evaluation", key="meth_velocity_yearly")
 
     st.markdown("""
 **What we can't answer with this data:**
@@ -3208,7 +3165,7 @@ per parent, avoiding double-counting reviews.
 
 #### Sales Rank
 Monthly average of Keepa's sales rank tracking (csv index 3). Lower rank = more sales.
-The rank is category-specific (e.g., "Cell Phones & Accessories" for Wallaroo).
+The rank is category-specific — "Cell Phones & Accessories" for Wallaroo Wallets, "Home & Kitchen" for TeacherFav.
 
 ---
 
@@ -3244,7 +3201,7 @@ Missing data points are forward-filled before summing.
 - **No verified financials for Wallaroo** — Flippa listing does not include a P&L. Revenue/profit claims are unverified.
 - **TeacherFav P&L is seller-reported** — Empire Flippers notes that product landed costs are submitted by the seller and not verified.
 - **Review counts ≠ sales** — Review count correlates with but does not equal units sold. Typical review rates are 1-5% of purchases.
-- **Sales rank is relative, not absolute** — Rank depends on category size and competition. A rank of 5,000 in "Cell Phones & Accessories" means different volume than 5,000 in "Toys & Games".
+- **Sales rank is relative, not absolute** — Rank depends on category size and competition. Wallaroo Wallets competes in "Cell Phones & Accessories" while TeacherFav competes in "Home & Kitchen" — a rank of 5,000 means different sales volume in each.
 - **Rating data has gaps** — Keepa samples ratings less frequently than review counts. Some product/year combinations have no rating samples even though Keepa is still tracking review counts. The yearly breakdown carries forward the last known rating where possible (marked "carried forward" in the table).
 - **No competitor analysis** — Dashboard only shows these products, not competing products in the same categories.
 - **Data scope** — All pages use the full historical data from Keepa.
@@ -3296,10 +3253,6 @@ def main():
         page_evaluation(biz_data, "Wallaroo Wallets")
     elif page == "TeacherFav — Evaluation":
         page_evaluation(biz_data, "TeacherFav")
-    elif page == "Wallaroo — Yearly Breakdown":
-        page_yearly_breakdown(biz_data, "Wallaroo Wallets")
-    elif page == "TeacherFav — Yearly Breakdown":
-        page_yearly_breakdown(biz_data, "TeacherFav")
     elif page == "Wallaroo — Seller Conversation":
         page_seller_conversation()
     elif page == "Methodology & Definitions":
