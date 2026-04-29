@@ -1386,18 +1386,18 @@ def page_executive_summary(biz_data):
                 )
             st.metric("Unique Products", f"{m['n_products']} ({m['n_variations']} variants)")
 
-            # Main Product Reviews with highest/lowest review products + links
+            # Main Product Reviews with low/avg review products + links
             st.metric("Main Product Reviews", f"{m['main_reviews']:,}")
             prods_with_reviews = [p for p in prods if p.get("review_count_history") and p["review_count_history"]]
             if prods_with_reviews:
                 rev_counts = [(p["review_count_history"][-1]["count"], p) for p in prods_with_reviews]
                 main_rev, main_rev_p = rev_counts[0]  # sorted by reviews desc = main
                 lo_rev, lo_rev_p = min(rev_counts, key=lambda x: x[0])
-                hi_rev, hi_rev_p = max(rev_counts, key=lambda x: x[0])
+                avg_rev = round(sum(c for c, _ in rev_counts) / len(rev_counts))
                 st.caption(
                     f"[Main: {main_rev:,}]({amazon_link(main_rev_p['representative_asin'])}) · "
                     f"[Low: {lo_rev:,}]({amazon_link(lo_rev_p['representative_asin'])}) · "
-                    f"[High: {hi_rev:,}]({amazon_link(hi_rev_p['representative_asin'])})"
+                    f"Avg: {avg_rev:,}"
                 )
 
             # Review Growth with main/high/low growth products + time range
@@ -1423,6 +1423,63 @@ def page_executive_summary(biz_data):
                         f"Over full data range: {m['main_first_date']} → {m['main_last_date']}"
                     )
             st.caption("*Main product = product with most reviews*")
+
+    # Product distribution tables (reviews & ratings per product)
+    for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
+        prods = biz_data[biz_name]["products"]
+        prods_with_data = [p for p in prods if p.get("review_count_history") and p["review_count_history"]]
+        if prods_with_data:
+            dist_rows = []
+            for p in prods_with_data:
+                rev = p["review_count_history"][-1]["count"]
+                rating = p["rating_history"][-1]["rating"] if p.get("rating_history") and p["rating_history"] else None
+                asin = p["representative_asin"]
+                dist_rows.append({
+                    "Product": product_name(p, short=True),
+                    "Reviews": rev,
+                    "Rating": f"{rating:.1f}" if rating else "—",
+                    "Amazon": amazon_link(asin),
+                })
+            dist_rows.sort(key=lambda x: x["Reviews"], reverse=True)
+            with st.expander(f"{biz_name} — All Products ({len(dist_rows)})"):
+                st.dataframe(pd.DataFrame(dist_rows), use_container_width=True, hide_index=True,
+                             column_config={"Amazon": st.column_config.LinkColumn("Amazon", display_text="View")})
+                # Side-by-side bar charts for reviews and ratings
+                chart_col1, chart_col2 = st.columns(2)
+                names = [r["Product"] for r in dist_rows]
+                reviews = [r["Reviews"] for r in dist_rows]
+                ratings_vals = [float(r["Rating"]) if r["Rating"] != "—" else 0 for r in dist_rows]
+                with chart_col1:
+                    fig_rev_dist = go.Figure()
+                    fig_rev_dist.add_trace(go.Bar(
+                        x=names, y=reviews,
+                        marker_color="#636EFA",
+                        text=[f"{v:,}" for v in reviews],
+                        textposition="auto",
+                    ))
+                    fig_rev_dist.update_layout(
+                        title="Reviews by Product", height=280,
+                        margin=dict(t=40, b=60, l=50, r=20),
+                        xaxis=dict(tickangle=-30),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_rev_dist, use_container_width=True)
+                with chart_col2:
+                    fig_rat_dist = go.Figure()
+                    fig_rat_dist.add_trace(go.Bar(
+                        x=names, y=ratings_vals,
+                        marker_color=["#00d4aa" if v >= 4.0 else "#ff6b6b" if v > 0 else "#555" for v in ratings_vals],
+                        text=[f"{v:.1f}" if v > 0 else "—" for v in ratings_vals],
+                        textposition="auto",
+                    ))
+                    fig_rat_dist.update_layout(
+                        title="Rating by Product", height=280,
+                        margin=dict(t=40, b=60, l=50, r=20),
+                        xaxis=dict(tickangle=-30),
+                        yaxis=dict(range=[0, 5]),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_rat_dist, use_container_width=True)
 
     st.divider()
 
