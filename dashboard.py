@@ -27,6 +27,7 @@ PAGE_NAMES = [
     "TeacherFav",
     "Wallaroo — Evaluation",
     "TeacherFav — Evaluation",
+    "Financials (Confidential)",
     "Wallaroo — Yearly Breakdown",
     "TeacherFav — Yearly Breakdown",
     "Wallaroo — Seller Conversation",
@@ -2354,23 +2355,23 @@ def page_evaluation(biz_data, biz_name):
             f"Core Sand Timer line at 4.4 stars with {products[0]['shared_reviews']:,} reviews — market leader",
             f"Toothbrush Timer at 4.6 stars ({products[1]['shared_reviews']:,} reviews) — STRONGER than initially reported",
             f"16 color variants of main timer = wide selection that's hard for new competitors to match",
-            "P&L verified: $46K/mo revenue, 10% margin via Empire Flippers",
+            "P&L available via Empire Flippers — see Financials page for revenue & margin details",
             f"Review growth at {m['main_growth_per_mo']:.0f} new reviews/month on main product — steady stream of new buyers",
             "Two strong products (Sand Timer 4.4, Toothbrush Timer 4.6) — diversified within niche",
         ] + rank_pros + rating_pros + review_pros
         cons = [
             f"Rating trend slightly DOWN on main product ({m['main_early_r']:.1f} -> {m['main_recent_r']:.1f})",
             f"60-Minute Timer at 3.4 stars (16 reviews) — worst performing product",
-            "10% margin is thin — vulnerable to cost increases or ad spend pressure",
+            "Margin is thin — vulnerable to cost increases or ad spend pressure (see Financials page)",
             f"Review growth {m['growth_dir'].lower()} — early {m['early_growth_mo']:.0f} reviews/mo vs recent {m['recent_growth_mo']:.0f} reviews/mo",
             f"Dashboard: FAILS age (<5yr) and multiple (>30x). 2 FAIL criteria on acquisition checklist",
         ] + rank_cons + rank_cons_extra + rating_cons + review_cons
         questions = [
             "Can the 60-Minute Timer (3.4 stars) be discontinued or redesigned?",
-            "Why is margin only 10% on $46K/mo revenue? Where are costs going?",
-            "Can TaCOS / Total Ad Cost of Sales (12.9%) be reduced without losing rank?",
+            "Why is margin thin relative to revenue? Where are costs going? (see Financials page)",
+            "Can TaCOS be reduced without losing rank? (see Financials page)",
             "What is the defect/return rate for the Sand Timer line?",
-            "Would seller accept $100K-120K (19-23x) given the 2 FAIL criteria?",
+            "What price would seller accept given the 2 FAIL criteria? (see Financials for multiples)",
         ]
         rank_note = _rank_summary_note(m)
         if rank_cons_extra:
@@ -2379,7 +2380,7 @@ def page_evaluation(biz_data, biz_name):
             f"The Toothbrush Timer at 4.6 stars is the strongest product in the portfolio. The core Sand Timer "
             f"line at 4.4 stars with {products[0]['shared_reviews']:,} reviews is solid. The only weak spot is the "
             f"60-Minute Timer at 3.4 stars with just 16 reviews.{rank_note} Overall product quality is strong across the "
-            f"main catalog. However, financial concerns remain: 10% margin is thin, and the listing fails 2 acquisition "
+            f"main catalog. However, margin is thin (see Financials page) and the listing fails 2 acquisition "
             f"criteria (age <5yr, multiple >30x). Worth pursuing at a lower price."
         )
 
@@ -2439,132 +2440,10 @@ def page_evaluation(biz_data, biz_name):
     if trend_rows:
         st.dataframe(pd.DataFrame(trend_rows), use_container_width=True, hide_index=True)
 
-    # Wallaroo seller-reported financials (no P&L available, only summary table)
-    if biz_name == "Wallaroo Wallets":
-        st.divider()
-        st.markdown("#### Seller-Reported Financials")
-        st.warning(
-            "⚠️ **Unverified data** — The seller provided this summary but has not shared a P&L, "
-            "bank statements, or Amazon payout reports. Verify independently before relying on these numbers."
-        )
-        wallaroo_fin = pd.DataFrame({
-            "": ["Gross Product Sales", "Net Revenue", "Total Amazon Fees", "FBA Reimbursements"],
-            "2021 (Sep-Dec)": ["$225,514", "$214,864", "($78,328)", "$1,426"],
-            "2022": ["$859,439", "$828,268", "($319,738)", "$8,780"],
-            "2023": ["$738,150", "$696,466", "($288,554)", "$13,124"],
-            "2024": ["$469,138", "$446,495", "($178,623)", "$5,753"],
-        })
-        st.dataframe(wallaroo_fin, use_container_width=True, hide_index=True)
-        st.markdown(
-            "**Notable trends:**\n"
-            "- Revenue peaked in 2022 ($859K gross) and has declined since: "
-            "-14% in 2023, -36% in 2024\n"
-            "- Amazon fees consistently ~38-41% of net revenue\n"
-            "- 2021 is partial year (Sep-Dec only) — annualized would be ~$676K gross\n"
-            "- No COGS or profit data provided — margin is unknown"
-        )
-
-    # P&L Financial Data (if available)
-    pnl_raw = load_pnl(biz_name)
-    if pnl_raw:
-        # Filter P&L to selected date range
-        start_ym = st.session_state.get("date_start", date(2020, 1, 1))
-        end_ym = st.session_state.get("date_end", date.today())
-        if isinstance(start_ym, date):
-            start_ym = start_ym.strftime("%Y-%m")
-        if isinstance(end_ym, date):
-            end_ym = end_ym.strftime("%Y-%m")
-        pnl = {}
-        for key, series in pnl_raw.items():
-            pnl[key] = {m: v for m, v in series.items() if start_ym <= m <= end_ym}
-
-        st.divider()
-        st.markdown("#### Financial Data (Empire Flippers P&L)")
-
-        # Revenue & Net Income chart
-        rev = pnl.get("Total Revenue", {})
-        net = pnl.get("Net Income", {})
-        if rev:
-            months_sorted = sorted(rev.keys())
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=[datetime.strptime(m, "%Y-%m") for m in months_sorted],
-                y=[rev[m] for m in months_sorted],
-                name="Revenue",
-                marker_color="#3498db",
-            ))
-            if net:
-                fig.add_trace(go.Bar(
-                    x=[datetime.strptime(m, "%Y-%m") for m in months_sorted if m in net],
-                    y=[net[m] for m in months_sorted if m in net],
-                    name="Net Income",
-                    marker_color="#2ecc71",
-                ))
-            fig.update_layout(
-                title=dict(text="Monthly Revenue & Net Income<br><sup>Source: Empire Flippers P&L (Listing #92221)</sup>"),
-                yaxis_title="USD",
-                height=400,
-                barmode="group",
-                margin=dict(l=60, r=20, t=50, b=40),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            # AI analysis for revenue chart
-            rev_vals = [rev[m] for m in months_sorted]
-            net_vals = [net.get(m, 0) for m in months_sorted]
-            recent_rev = rev_vals[-3:] if len(rev_vals) >= 3 else rev_vals
-            avg_recent_rev = sum(recent_rev) / len(recent_rev) if recent_rev else 0
-            recent_net = net_vals[-3:] if len(net_vals) >= 3 else net_vals
-            avg_recent_net = sum(recent_net) / len(recent_net) if recent_net else 0
-            margin_pct = (avg_recent_net / avg_recent_rev * 100) if avg_recent_rev else 0
-            if rev_vals[-1] < rev_vals[0] * 0.8:
-                rev_decline = (1 - rev_vals[-1] / rev_vals[0]) * 100
-                rev_stake = f"Revenue declined {rev_decline:.0f}% over this period — at this rate, the business generates \\${rev_vals[-1]:,.0f}/mo, which directly reduces the earnings base used to calculate acquisition multiples."
-            else:
-                rev_stake = f"Revenue is stable or growing over this period, supporting the current earnings multiple."
-            _ai_caption(
-                f"Recent 3-month average: \\${avg_recent_rev:,.0f}/mo revenue, \\${avg_recent_net:,.0f}/mo net income ({margin_pct:.0f}% margin). {rev_stake}"
-            )
-
-        # Margin chart
-        margin = pnl.get("Net Profit Margin (12mo trailing)", {})
-        tacos = pnl.get("TaCOS (Total Ad Cost of Sales)", {})
-        if margin:
-            months_sorted = sorted(margin.keys())
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=[datetime.strptime(m, "%Y-%m") for m in months_sorted],
-                y=[margin[m] for m in months_sorted],
-                name="Net Profit Margin (12mo trailing)",
-                mode="lines+markers",
-                line=dict(width=2, color="#2ecc71"),
-            ))
-            if tacos:
-                fig.add_trace(go.Scatter(
-                    x=[datetime.strptime(m, "%Y-%m") for m in months_sorted if m in tacos],
-                    y=[tacos[m] for m in months_sorted if m in tacos],
-                    name="TaCOS (Total Ad Cost of Sales)",
-                    mode="lines+markers",
-                    line=dict(width=2, color="#e74c3c"),
-                ))
-            fig.update_layout(
-                title=dict(text="Margins & Ad Efficiency<br><sup>Source: Empire Flippers P&L (Listing #92221)</sup>"),
-                yaxis_title="%",
-                height=350,
-                margin=dict(l=60, r=20, t=50, b=40),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            # AI analysis for margin chart
-            margin_vals = [margin[m] for m in months_sorted]
-            latest_margin = margin_vals[-1]
-            tacos_latest = tacos.get(months_sorted[-1]) if tacos else None
-            tacos_note = f" TaCOS is {tacos_latest:.1f}% — every 1% increase in ad spend reduces net margin by ~1 percentage point at current revenue." if tacos_latest else ""
-            if latest_margin < 15:
-                margin_stake = f"Net profit margin is {latest_margin:.1f}%. A 10% tariff increase or \\$0.50/unit cost rise would eliminate {min(latest_margin, 5):.0f}+ percentage points of margin at current pricing."
-            else:
-                margin_stake = f"Net profit margin is {latest_margin:.1f}%. The business retains {latest_margin - 10:.0f} percentage points of buffer above a 10% minimum viable margin."
-            _ai_caption(f"{margin_stake}{tacos_note}")
-
-        st.caption("Source: Empire Flippers verified P&L (Listing #92221)")
+    # Financial data has been moved to a separate confidential page
+    st.divider()
+    st.info("Financial data (P&L, revenue, margins) is on a separate confidential page.")
+    nav_link("→ View Financial Data (confidential)", "Financials (Confidential)", key=f"nav_fin_{biz_name}")
 
 
 def _period_summary(products, label, cutoff_iso):
@@ -2590,6 +2469,136 @@ def _period_summary(products, label, cutoff_iso):
         })
     if rows:
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def page_financials(biz_data):
+    """Confidential financial data page — P&L charts and seller-reported numbers."""
+    st.header("Financial Data (Confidential)")
+    st.warning(
+        "This page contains confidential financial information from Empire Flippers and seller disclosures. "
+        "Do not share externally."
+    )
+
+    # ── Wallaroo Wallets — seller-reported summary ──
+    st.subheader("Wallaroo Wallets — Seller-Reported Financials")
+    st.warning(
+        "**Unverified data** — The seller provided this summary but has not shared a P&L, "
+        "bank statements, or Amazon payout reports. Verify independently before relying on these numbers."
+    )
+    wallaroo_fin = pd.DataFrame({
+        "": ["Gross Product Sales", "Net Revenue", "Total Amazon Fees", "FBA Reimbursements"],
+        "2021 (Sep-Dec)": ["$225,514", "$214,864", "($78,328)", "$1,426"],
+        "2022": ["$859,439", "$828,268", "($319,738)", "$8,780"],
+        "2023": ["$738,150", "$696,466", "($288,554)", "$13,124"],
+        "2024": ["$469,138", "$446,495", "($178,623)", "$5,753"],
+    })
+    st.dataframe(wallaroo_fin, use_container_width=True, hide_index=True)
+    st.markdown(
+        "**Notable trends:**\n"
+        "- Revenue peaked in 2022 ($859K gross) and has declined since: "
+        "-14% in 2023, -36% in 2024\n"
+        "- Amazon fees consistently ~38-41% of net revenue\n"
+        "- 2021 is partial year (Sep-Dec only) — annualized would be ~$676K gross\n"
+        "- No COGS or profit data provided — margin is unknown"
+    )
+    nav_link("→ Back to Wallaroo Evaluation", "Wallaroo — Evaluation", key="fin_back_wal")
+
+    st.divider()
+
+    # ── TeacherFav — Empire Flippers P&L ──
+    st.subheader("TeacherFav — Empire Flippers P&L")
+    pnl_raw = load_pnl("TeacherFav")
+    if not pnl_raw:
+        st.error("P&L file not found.")
+        return
+
+    pnl = pnl_raw  # show full range on this page
+
+    # Revenue & Net Income chart
+    rev = pnl.get("Total Revenue", {})
+    net = pnl.get("Net Income", {})
+    if rev:
+        months_sorted = sorted(rev.keys())
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=[datetime.strptime(m, "%Y-%m") for m in months_sorted],
+            y=[rev[m] for m in months_sorted],
+            name="Revenue",
+            marker_color="#3498db",
+        ))
+        if net:
+            fig.add_trace(go.Bar(
+                x=[datetime.strptime(m, "%Y-%m") for m in months_sorted if m in net],
+                y=[net[m] for m in months_sorted if m in net],
+                name="Net Income",
+                marker_color="#2ecc71",
+            ))
+        fig.update_layout(
+            title=dict(text="Monthly Revenue & Net Income<br><sup>Source: Empire Flippers P&L (Listing #92221)</sup>"),
+            yaxis_title="USD",
+            height=400,
+            barmode="group",
+            margin=dict(l=60, r=20, t=50, b=40),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        # AI analysis for revenue chart
+        rev_vals = [rev[m] for m in months_sorted]
+        net_vals = [net.get(m, 0) for m in months_sorted]
+        recent_rev = rev_vals[-3:] if len(rev_vals) >= 3 else rev_vals
+        avg_recent_rev = sum(recent_rev) / len(recent_rev) if recent_rev else 0
+        recent_net = net_vals[-3:] if len(net_vals) >= 3 else net_vals
+        avg_recent_net = sum(recent_net) / len(recent_net) if recent_net else 0
+        margin_pct = (avg_recent_net / avg_recent_rev * 100) if avg_recent_rev else 0
+        if rev_vals[-1] < rev_vals[0] * 0.8:
+            rev_decline = (1 - rev_vals[-1] / rev_vals[0]) * 100
+            rev_stake = f"Revenue declined {rev_decline:.0f}% over this period — at this rate, the business generates \\${rev_vals[-1]:,.0f}/mo, which directly reduces the earnings base used to calculate acquisition multiples."
+        else:
+            rev_stake = f"Revenue is stable or growing over this period, supporting the current earnings multiple."
+        _ai_caption(
+            f"Recent 3-month average: \\${avg_recent_rev:,.0f}/mo revenue, \\${avg_recent_net:,.0f}/mo net income ({margin_pct:.0f}% margin). {rev_stake}"
+        )
+
+    # Margin chart
+    margin = pnl.get("Net Profit Margin (12mo trailing)", {})
+    tacos = pnl.get("TaCOS (Total Ad Cost of Sales)", {})
+    if margin:
+        months_sorted = sorted(margin.keys())
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=[datetime.strptime(m, "%Y-%m") for m in months_sorted],
+            y=[margin[m] for m in months_sorted],
+            name="Net Profit Margin (12mo trailing)",
+            mode="lines+markers",
+            line=dict(width=2, color="#2ecc71"),
+        ))
+        if tacos:
+            fig.add_trace(go.Scatter(
+                x=[datetime.strptime(m, "%Y-%m") for m in months_sorted if m in tacos],
+                y=[tacos[m] for m in months_sorted if m in tacos],
+                name="TaCOS (Total Ad Cost of Sales)",
+                mode="lines+markers",
+                line=dict(width=2, color="#e74c3c"),
+            ))
+        fig.update_layout(
+            title=dict(text="Margins & Ad Efficiency<br><sup>Source: Empire Flippers P&L (Listing #92221)</sup>"),
+            yaxis_title="%",
+            height=350,
+            margin=dict(l=60, r=20, t=50, b=40),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        # AI analysis for margin chart
+        margin_vals = [margin[m] for m in months_sorted]
+        latest_margin = margin_vals[-1]
+        tacos_latest = tacos.get(months_sorted[-1]) if tacos else None
+        tacos_note = f" TaCOS is {tacos_latest:.1f}% — every 1% increase in ad spend reduces net margin by ~1 percentage point at current revenue." if tacos_latest else ""
+        if latest_margin < 15:
+            margin_stake = f"Net profit margin is {latest_margin:.1f}%. A 10% tariff increase or \\$0.50/unit cost rise would eliminate {min(latest_margin, 5):.0f}+ percentage points of margin at current pricing."
+        else:
+            margin_stake = f"Net profit margin is {latest_margin:.1f}%. The business retains {latest_margin - 10:.0f} percentage points of buffer above a 10% minimum viable margin."
+        _ai_caption(f"{margin_stake}{tacos_note}")
+
+    st.caption("Source: Empire Flippers verified P&L (Listing #92221)")
+    nav_link("→ Back to TeacherFav Evaluation", "TeacherFav — Evaluation", key="fin_back_tf")
 
 
 def page_yearly_breakdown(biz_data, biz_name):
@@ -3309,6 +3318,8 @@ def main():
         page_evaluation(biz_data, "Wallaroo Wallets")
     elif page == "TeacherFav — Evaluation":
         page_evaluation(biz_data, "TeacherFav")
+    elif page == "Financials (Confidential)":
+        page_financials(biz_data)
     elif page == "Wallaroo — Yearly Breakdown":
         page_yearly_breakdown(biz_data, "Wallaroo Wallets")
     elif page == "TeacherFav — Yearly Breakdown":
