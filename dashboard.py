@@ -2825,11 +2825,64 @@ Keepa provides **complete, accurate** historical data for ratings and review cou
 
 A product with 4.6★ and 8,000 reviews looks great on the surface — but aggregate numbers can hide serious problems. This is why trend analysis is essential for acquisition due diligence:
 
-- **Aggregate ratings are sticky/lagging** — A product with 8,000 reviews at 4.6★ could have quality problems for 6 months and the average barely moves. Recent trend catches this.
-- **Detects product/seller changes** — Common Amazon pattern: product builds reputation, then seller cheapens materials or listing gets hijacked. Old reviews mask the change.
-- **Spots review manipulation** — Sudden spikes in review volume (especially 5★ clusters) indicate paid reviews or giveaway campaigns. Healthy products accumulate reviews smoothly.
-- **Distinguishes "old hit" from "current hit"** — Two products both at 4.5★/5,000 reviews look identical, but one might have gotten 90% of reviews 3 years ago and barely sells now.
-- **Review removals are a signal** — Amazon mass-purging reviews (visible as drops in review count charts) indicates past manipulation. This is valuable due diligence data.
+#### 1. Aggregate ratings are sticky/lagging
+A product with 8,000 reviews at 4.6★ could have quality problems for 6 months and the average barely moves. Recent trend catches this.
+
+**Where this is answered in the dashboard:**
+- **Executive Summary → Trend Table**: Rating column shows movement over 6mo/1yr/2yr (e.g. "4.6 → 4.5 (−0.10)")
+- **Executive Summary → Trend Charts → Rating line chart**: Full time-series with the recent window highlighted in red — visual separation of "now" vs "then"
+- **Executive Summary → Avg Rating bar chart**: Compares mean rating in recent vs prior period — directly catches recent quality decline even if the aggregate hasn't moved
+- **[Business] page → Rating Trend KPI**: STABLE / IMPROVING / DECLINING label based on first-half vs second-half average
+
+#### 2. Detects product/seller changes
+Common Amazon pattern: product builds reputation, then seller cheapens materials or listing gets hijacked. Old reviews mask the change.
+
+**Where this is partially answered:**
+- **[Business] page → Notable Events → Rating Changes table**: Flags rating drops > 0.2 with "Possible quality issue or product change"
+- **[Business] page → Notable Events → Price Changes table**: Shows price increases/decreases > 20% — price drops after a rating drop can signal material cheapening
+
+**What we don't have:**
+- No seller identity tracking — we can't detect if the seller behind the listing changed (listing hijack)
+- No correlation between rating drops and price changes — you have to manually cross-reference the two tables
+- No review text/sentiment analysis — we can't distinguish "quality got worse" from "shipping was slow" from a rating number alone
+
+#### 3. Spots review manipulation
+Sudden spikes in review volume (especially 5★ clusters) indicate paid reviews or giveaway campaigns. Healthy products accumulate reviews smoothly.
+
+**Where this is answered:**
+- **Executive Summary → Reviews/Mo Distribution box plot**: Shows whether review velocity is steady (tight box) or spiky (wide box with outliers) — spiky = suspicious
+- **Executive Summary → Review Frequency line chart**: Visual time-series of reviews/month — organic growth looks smooth, manipulation shows as sharp spikes
+- **[Business] page → Notable Events → Review Changes table**: Flags individual surge events ("Unusually high number of new reviews in a short period")
+- **[Business] page → Review Integrity Assessment** (in expander): Quarterly growth consistency check — flags if any quarter's growth > 2× the average
+
+**What we don't have:**
+- No star-rating breakdown per period — we can't detect "5★ clusters" specifically, only total review volume spikes
+- No review text analysis — can't check for generic/templated language typical of fake reviews
+- No reviewer profile analysis — can't detect if reviews come from suspicious accounts
+
+#### 4. Distinguishes "old hit" from "current hit"
+Two products both at 4.5★/5,000 reviews look identical, but one might have gotten 90% of reviews 3 years ago and barely sells now.
+
+**Where this is answered:**
+- **Executive Summary → Trend Table → Reviews column**: Shows reviews added and per-month rate for 6mo/1yr/2yr — directly reveals if growth is current or historical
+- **[Business] page → Review Growth KPI**: Reviews/month rate for the main product
+- **[Business] page → Rating Trend KPI**: ACCELERATING / DECELERATING label
+- **Executive Summary → Review Frequency line chart**: Visual time-series makes it immediately obvious if the product is still gaining reviews or flatlined years ago
+- **[Evaluation] page → AI commentary**: Explicitly calls out when review acquisition has dropped below peak levels
+- **[Yearly Breakdown] page**: Year-by-year review additions show exactly when growth happened
+
+#### 5. Review removals are a signal
+Amazon mass-purging reviews (visible as drops in review count charts) indicates past manipulation. This is valuable due diligence data.
+
+**Where this is answered:**
+- **[Business] page → Review Count chart**: Cumulative line chart — drops are visually obvious as downward steps. Caption: "Drops indicate reviews removed by Amazon"
+- **[Business] page → Notable Events → Review Changes table**: Every purge event listed with date, size, and note "Amazon removed reviews — past review manipulation flagged"
+- **[Business] page → Review Integrity Assessment**: Counts total purge events and total reviews removed; flags products with >100 removed
+- **[Business] page → Price + Review overlay chart**: Green bars show monthly review additions with purge months excluded — lets you see the "clean" growth rate
+
+**What we don't have:**
+- No breakdown of purge severity — a single removal of 5 reviews vs. a mass purge of 680 reviews are both flagged, but the severity implications are very different
+- No correlation with Amazon policy changes — some purges are platform-wide sweeps (less concerning) vs. targeted enforcement (more concerning)
 
 ---
 
