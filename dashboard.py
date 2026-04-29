@@ -588,12 +588,6 @@ def render_notable_events(target_products, label):
                        line=dict(color="#EF553B", width=2)),
             secondary_y=True,
         )
-        # Mark purge/surge events
-        spikes = detect_review_spikes(ch)
-        for spike in spikes:
-            color = "red" if spike["direction"] == "purge" else "green"
-            fig.add_vline(x=spike["date"], line_dash="dot",
-                          line_color=color, opacity=0.4)
         fig.update_layout(
             title=f"{name} — Review Count vs Rating",
             height=280,
