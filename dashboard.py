@@ -1369,11 +1369,60 @@ def page_executive_summary(biz_data):
         with col:
             st.subheader(biz_name)
             st.metric("Total Reviews", f"{m['total_reviews']:,}")
+            # Weighted avg rating with main/lowest/highest product ratings + Amazon links
             st.metric("Weighted Avg Rating", f"{m['weighted_avg_rating']:.1f}" if m["weighted_avg_rating"] else "?")
+            prods = biz_data[biz_name]["products"]
+            rated_prods = [p for p in prods if p.get("rating_history") and p["rating_history"]]
+            if rated_prods:
+                ratings = [(p["rating_history"][-1]["rating"], p) for p in rated_prods]
+                main_p = rated_prods[0]  # sorted by reviews desc
+                main_r = ratings[0][0]
+                lo_r, lo_p = min(ratings, key=lambda x: x[0])
+                hi_r, hi_p = max(ratings, key=lambda x: x[0])
+                st.caption(
+                    f"[Main: {main_r:.1f}]({amazon_link(main_p['representative_asin'])}) · "
+                    f"[Low: {lo_r:.1f}]({amazon_link(lo_p['representative_asin'])}) · "
+                    f"[High: {hi_r:.1f}]({amazon_link(hi_p['representative_asin'])})"
+                )
             st.metric("Unique Products", f"{m['n_products']} ({m['n_variations']} variants)")
+
+            # Main Product Reviews with highest/lowest review products + links
             st.metric("Main Product Reviews", f"{m['main_reviews']:,}")
-            st.metric("Main Product Rating", f"{m['main_rating']:.1f}" if m["main_rating"] else "?")
+            prods_with_reviews = [p for p in prods if p.get("review_count_history") and p["review_count_history"]]
+            if prods_with_reviews:
+                rev_counts = [(p["review_count_history"][-1]["count"], p) for p in prods_with_reviews]
+                main_rev, main_rev_p = rev_counts[0]  # sorted by reviews desc = main
+                lo_rev, lo_rev_p = min(rev_counts, key=lambda x: x[0])
+                hi_rev, hi_rev_p = max(rev_counts, key=lambda x: x[0])
+                st.caption(
+                    f"[Main: {main_rev:,}]({amazon_link(main_rev_p['representative_asin'])}) · "
+                    f"[Low: {lo_rev:,}]({amazon_link(lo_rev_p['representative_asin'])}) · "
+                    f"[High: {hi_rev:,}]({amazon_link(hi_rev_p['representative_asin'])})"
+                )
+
+            # Review Growth with main/high/low growth products + time range
             st.metric("Review Growth (reviews/mo)", f"{m['main_growth_per_mo']:.1f}")
+            if prods_with_reviews and len(prods_with_reviews) > 0:
+                growth_data = []
+                for p in prods_with_reviews:
+                    ch = p["review_count_history"]
+                    if len(ch) >= 2:
+                        first_dt = datetime.fromisoformat(ch[0]["date"])
+                        last_dt = datetime.fromisoformat(ch[-1]["date"])
+                        span = max(1, (last_dt - first_dt).days / 30.44)
+                        gpm = (ch[-1]["count"] - ch[0]["count"]) / span
+                        growth_data.append((round(gpm, 1), p))
+                if growth_data:
+                    main_g, main_g_p = growth_data[0]
+                    lo_g, lo_g_p = min(growth_data, key=lambda x: x[0])
+                    hi_g, hi_g_p = max(growth_data, key=lambda x: x[0])
+                    st.caption(
+                        f"[Main: {main_g}/mo]({amazon_link(main_g_p['representative_asin'])}) · "
+                        f"[Low: {lo_g}/mo]({amazon_link(lo_g_p['representative_asin'])}) · "
+                        f"[High: {hi_g}/mo]({amazon_link(hi_g_p['representative_asin'])})  \n"
+                        f"Over full data range: {m['main_first_date']} → {m['main_last_date']}"
+                    )
+            st.caption("*Main product = product with most reviews*")
 
     st.divider()
 
