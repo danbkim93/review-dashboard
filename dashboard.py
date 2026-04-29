@@ -1435,26 +1435,79 @@ def page_executive_summary(biz_data):
     for biz_name in ["Wallaroo Wallets", "TeacherFav"]:
         st.markdown(f"**{biz_name}**")
         bm = biz_data[biz_name]["metrics"]
+        prods = biz_data[biz_name]["products"]
+        main_prod = max(prods, key=lambda p: p.get("reviewCount", 0)) if prods else None
+        ch_raw = main_prod.get("review_count_history", []) if main_prod else []
+        rh_raw = main_prod.get("rating_history", []) if main_prod else []
+        rank_data = main_prod.get("monthly_avg_rank", {}) if main_prod else {}
         trend_rows = []
         for label in ["6mo", "1yr", "2yr"]:
-            start = today - relativedelta(months=period_months[label])
+            mo = period_months[label]
+            start = today - relativedelta(months=mo)
+            prior_start = today - relativedelta(months=mo * 2)
             row = {"Period": f"Last {label} ({start.strftime('%Y-%m')} → {today.strftime('%Y-%m')})"}
-            # Rating
+
+            # Rating: recent delta vs prior-period delta
             if label in bm.get("rating_periods", {}):
                 rp = bm["rating_periods"][label]
-                row["Rating"] = f"{rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({rp['delta']:+.2f})"
+                rating_str = f"{rp['from_rating']:.1f} → {rp['to_rating']:.1f} ({rp['delta']:+.2f})"
+                # Compute prior-period rating delta
+                if rh_raw:
+                    rh_dates = [(r["date"], r["rating"]) for r in rh_raw]
+                    cutoff_iso = start.isoformat()
+                    prior_start_iso = prior_start.isoformat()
+                    prior_ratings = [r for d, r in rh_dates if prior_start_iso <= d <= cutoff_iso]
+                    pre_prior = [r for d, r in rh_dates if d <= prior_start_iso]
+                    if prior_ratings and pre_prior:
+                        prior_delta = round(prior_ratings[-1] - pre_prior[-1], 2)
+                        diff = rp['delta'] - prior_delta
+                        rating_str += f" · prior {label}: {prior_delta:+.2f}, Δ{diff:+.2f}"
+                row["Rating"] = rating_str
             else:
                 row["Rating"] = "—"
-            # Reviews added + per month
+
+            # Reviews: recent per_month vs prior-period per_month
             if label in bm.get("review_periods", {}):
                 rvp = bm["review_periods"][label]
-                row["Reviews"] = f"+{rvp['added']:,} ({rvp['per_month']:.1f}/mo)"
+                rev_str = f"+{rvp['added']:,} ({rvp['per_month']:.1f}/mo)"
+                # Compute prior-period reviews/mo
+                if ch_raw and len(ch_raw) >= 2:
+                    cutoff_dt = datetime.fromisoformat(ch_raw[-1]["date"]) - timedelta(days=mo * 30.44)
+                    past_at_cutoff = [c for c in ch_raw if c["date"] <= cutoff_dt.isoformat()]
+                    if past_at_cutoff:
+                        anchor = past_at_cutoff[-1]
+                        prior_cutoff_dt = datetime.fromisoformat(anchor["date"]) - timedelta(days=mo * 30.44)
+                        prior_past = [c for c in ch_raw if c["date"] <= prior_cutoff_dt.isoformat()]
+                        if prior_past:
+                            ref = prior_past[-1]
+                            added_prior = anchor["count"] - ref["count"]
+                            span_prior = max(1, (datetime.fromisoformat(anchor["date"]) - datetime.fromisoformat(ref["date"])).days / 30.44)
+                            prior_pm = round(added_prior / span_prior, 1)
+                            diff_pm = round(rvp['per_month'] - prior_pm, 1)
+                            rev_str += f" · prior {label}: {prior_pm}/mo, {diff_pm:+.1f}"
+                row["Reviews"] = rev_str
             else:
                 row["Reviews"] = "—"
-            # Sales Rank
+
+            # Sales Rank: recent pct_change vs prior-period pct_change
             if label in bm.get("main_rank_periods", {}):
                 srp = bm["main_rank_periods"][label]
-                row["Sales Rank"] = f"#{srp['from_rank']:,.0f} → #{srp['to_rank']:,.0f} ({srp['pct_change']:+.0f}%)"
+                rank_str = f"#{srp['from_rank']:,.0f} → #{srp['to_rank']:,.0f} ({srp['pct_change']:+.0f}%)"
+                # Compute prior-period rank change
+                if rank_data and len(rank_data) >= 2:
+                    rank_months_sorted = sorted(rank_data.keys())
+                    cutoff_ym = start.strftime("%Y-%m")
+                    prior_start_ym = prior_start.strftime("%Y-%m")
+                    end_months = [m for m in rank_months_sorted if m <= cutoff_ym]
+                    start_months = [m for m in rank_months_sorted if m <= prior_start_ym]
+                    if end_months and start_months:
+                        prior_end_rank = rank_data[end_months[-1]]
+                        prior_start_rank = rank_data[start_months[-1]]
+                        if prior_start_rank > 0:
+                            prior_pct = round((prior_end_rank - prior_start_rank) / prior_start_rank * 100)
+                            diff_pct = round(srp['pct_change'] - prior_pct)
+                            rank_str += f" · prior {label}: {prior_pct:+.0f}%, Δ{diff_pct:+.0f}pp"
+                row["Sales Rank"] = rank_str
             else:
                 row["Sales Rank"] = "—"
             trend_rows.append(row)
@@ -1607,17 +1660,27 @@ def page_executive_summary(biz_data):
                 st.info("No review count history available.")
 
         # --- Comparison bar charts + frequency line chart ---
-        # Compute review frequency (reviews added per interval) from cumulative
+        # Compute review frequency using calendar-month resampling (matches business page)
         freq_df = pd.DataFrame(columns=["date", "freq"])
         if not ch_df.empty and len(ch_df) >= 2:
-            freq_df = ch_df.copy()
-            freq_df["freq"] = freq_df["count"].diff()
-            freq_df["days"] = freq_df["date"].diff().dt.days
-            freq_df = freq_df.dropna(subset=["freq"])
-            freq_df = freq_df[freq_df["days"] > 0]
-            freq_df["freq"] = (freq_df["freq"] / freq_df["days"] * 30.44).round(1)
-            freq_df = freq_df[freq_df["freq"] >= 0]  # drop Keepa data-correction artifacts
-            freq_df = freq_df.drop(columns=["days"])
+            monthly_data = {}
+            for _, row in ch_df.iterrows():
+                ym = row["date"].strftime("%Y-%m")
+                monthly_data[ym] = row["count"]  # last snapshot per month wins
+            months_sorted = sorted(monthly_data.keys())
+            if len(months_sorted) >= 2:
+                vel_months = []
+                vel_values = []
+                for i in range(1, len(months_sorted)):
+                    prev_m, curr_m = months_sorted[i - 1], months_sorted[i]
+                    prev_dt = datetime.strptime(prev_m, "%Y-%m")
+                    curr_dt = datetime.strptime(curr_m, "%Y-%m")
+                    days_between = max(1, (curr_dt - prev_dt).days)
+                    new_reviews = monthly_data[curr_m] - monthly_data[prev_m]
+                    per_month = new_reviews / (days_between / 30.44)
+                    vel_months.append(curr_dt)
+                    vel_values.append(round(per_month, 1))
+                freq_df = pd.DataFrame({"date": vel_months, "freq": vel_values})
 
         # Rating: highlighted avg vs rest avg
         r_highlighted_avg = None
@@ -1656,17 +1719,16 @@ def page_executive_summary(biz_data):
         with cb2:
             if not freq_df.empty and len(freq_df) > 0:
                 fig_freq = go.Figure()
-                fig_freq.add_trace(go.Scatter(
+                fig_freq.add_trace(go.Bar(
                     x=freq_df["date"], y=freq_df["freq"],
-                    mode="lines+markers", marker=dict(size=4),
-                    line=dict(color="#636EFA"), name="Reviews Added",
+                    marker_color=["#00d4aa" if v >= 0 else "#ff6b6b" for v in freq_df["freq"]],
                 ))
                 fig_freq.add_vrect(
                     x0=cutoff, x1=pd.Timestamp(today),
                     fillcolor="rgba(239,85,59,0.15)", line_width=0,
                 )
                 fig_freq.update_layout(
-                    title="Review Frequency (reviews/mo)", height=220,
+                    title="New Reviews per Month", height=220,
                     margin=dict(t=50, b=30, l=50, r=20),
                     showlegend=False,
                 )
@@ -1690,7 +1752,7 @@ def page_executive_summary(biz_data):
                         marker_color="#EF553B", boxmean=True,
                     ))
                 fig_box.update_layout(
-                    title=f"Reviews/Mo Distribution ({label})", height=220,
+                    title=f"Reviews/Month Distribution ({label})", height=220,
                     margin=dict(t=50, b=30, l=50, r=20),
                     yaxis=dict(rangemode="tozero"),
                     showlegend=False,
@@ -1702,10 +1764,10 @@ def page_executive_summary(biz_data):
     st.caption(
         "**How chart values are calculated:** "
         "• **Avg Rating** = mean of all Keepa rating snapshots within the window. "
-        "• **Review Frequency line** = reviews added between consecutive Keepa snapshots, normalized to reviews/month "
-        "(diff ÷ days × 30.44). Negative diffs from Keepa data corrections are excluded. "
-        "• **Reviews/Mo Distribution box plot** = spread of per-snapshot reviews/month values; diamond = mean, line = median. "
-        "Shows whether review velocity is steady or spiky. "
+        "• **New Reviews per Month** = reviews added per calendar month (last Keepa snapshot each month minus previous month). "
+        "Green bars = reviews added, red bars = reviews removed (Amazon purges). "
+        "• **Reviews/Month Distribution box plot** = spread of monthly review counts; diamond = mean, line = median. "
+        "Shows whether review velocity is steady or variable. "
         "• **Recent** = the selected time window ending today. **Prior** = the same-length window immediately before it."
     )
 
