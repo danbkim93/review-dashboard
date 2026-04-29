@@ -1579,7 +1579,6 @@ def page_executive_summary(biz_data):
     st.markdown("#### Trend Charts (Main Product)")
     st.caption("Full time-series with the recent window highlighted. "
                "Annotations compare the recent window against the equivalent prior period.")
-    nav_link("📐 How charts catch sticky ratings & old hits → Methodology", "Methodology & Definitions", key="nav_charts_meth")
 
     window_options_raw = {"6mo": 6, "1yr": 12, "2yr": 24}
     window_display = []
