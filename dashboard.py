@@ -1494,6 +1494,7 @@ def page_executive_summary(biz_data):
         prods_with_data = [p for p in prods if p.get("review_count_history") and p["review_count_history"]]
         if prods_with_data:
             dist_rows = []
+            total_reviews = sum(p["review_count_history"][-1]["count"] for p in prods_with_data)
             for p in prods_with_data:
                 rev = p["review_count_history"][-1]["count"]
                 rating = p["rating_history"][-1]["rating"] if p.get("rating_history") and p["rating_history"] else None
@@ -1501,6 +1502,7 @@ def page_executive_summary(biz_data):
                 dist_rows.append({
                     "Product": product_name(p, short=True),
                     "Reviews": rev,
+                    "% of Total": f"{rev / total_reviews * 100:.1f}%" if total_reviews else "—",
                     "Rating": f"{rating:.1f}" if rating else "—",
                     "Amazon": amazon_link(asin),
                 })
@@ -1518,7 +1520,7 @@ def page_executive_summary(biz_data):
                     fig_rev_dist.add_trace(go.Bar(
                         x=names, y=reviews,
                         marker_color="#636EFA",
-                        text=[f"{v:,}" for v in reviews],
+                        text=[f"{v:,} ({v/total_reviews*100:.0f}%)" for v in reviews],
                         textposition="inside",
                         textfont=dict(color="white"),
                     ))
