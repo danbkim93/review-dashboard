@@ -246,6 +246,43 @@ def compute_metrics(products):
                     "per_month": added / span_months,
                 }
 
+    # Outlier-removed review growth (IQR method on monthly frequencies)
+    m["review_periods_clean"] = {}
+    m["review_outliers_removed"] = 0
+    if ch and len(ch) >= 3:
+        # Build monthly frequencies
+        _monthly_counts = {}
+        for c in ch:
+            ym = c["date"][:7]
+            _monthly_counts[ym] = c["count"]
+        _ms = sorted(_monthly_counts.keys())
+        if len(_ms) >= 3:
+            _freqs, _freq_dts = [], []
+            for i in range(1, len(_ms)):
+                _prev_dt = datetime.strptime(_ms[i - 1], "%Y-%m")
+                _curr_dt = datetime.strptime(_ms[i], "%Y-%m")
+                _days = max(1, (_curr_dt - _prev_dt).days)
+                _freqs.append((_monthly_counts[_ms[i]] - _monthly_counts[_ms[i - 1]]) / (_days / 30.44))
+                _freq_dts.append(_curr_dt)
+            _fs = pd.Series(_freqs)
+            _q1, _q3 = _fs.quantile(0.25), _fs.quantile(0.75)
+            _iqr = _q3 - _q1
+            _mask = (_fs >= _q1 - 1.5 * _iqr) & (_fs <= _q3 + 1.5 * _iqr)
+            m["review_outliers_removed"] = int((~_mask).sum())
+            m["review_outlier_bounds"] = {"q1": round(_q1, 1), "q3": round(_q3, 1), "iqr": round(_iqr, 1),
+                                          "lower": round(_q1 - 1.5 * _iqr, 1), "upper": round(_q3 + 1.5 * _iqr, 1)}
+            _clean_freqs = [f for f, mk in zip(_freqs, _mask) if mk]
+            _clean_dts = [d for d, mk in zip(_freq_dts, _mask) if mk]
+            latest_dt = _freq_dts[-1] if _freq_dts else datetime.now()
+            for label, months_back in [("6mo", 6), ("1yr", 12), ("2yr", 24)]:
+                cut = latest_dt - timedelta(days=months_back * 30.44)
+                period_freqs = [f for f, d in zip(_clean_freqs, _clean_dts) if d >= cut]
+                if period_freqs:
+                    m["review_periods_clean"][label] = {
+                        "per_month": sum(period_freqs) / len(period_freqs),
+                        "n_months": len(period_freqs),
+                    }
+
     # Sales rank for main product — compute over specific time windows
     rank_data = main.get("monthly_avg_rank", {})
     if rank_data and len(rank_data) >= 2:
@@ -1516,6 +1553,25 @@ def page_executive_summary(biz_data):
     w = biz_data["Wallaroo Wallets"]["metrics"]
     t = biz_data["TeacherFav"]["metrics"]
 
+    # Format outlier-removed review growth from precomputed metrics
+    def _fmt_clean_growth(m):
+        clean = m.get("review_periods_clean", {})
+        n_outliers = m.get("review_outliers_removed", 0)
+        rate_1yr = clean["1yr"]["per_month"] if "1yr" in clean else None
+        rate_2yr = clean["2yr"]["per_month"] if "2yr" in clean else None
+        if rate_1yr is None:
+            return "N/A"
+        s = f"{rate_1yr:.0f} reviews/mo"
+        if rate_2yr is not None:
+            if rate_1yr < rate_2yr * 0.9:
+                s += f", slowing (was {rate_2yr:.0f}/mo 2yr ago)"
+            elif rate_1yr > rate_2yr * 1.1:
+                s += f", accelerating (was {rate_2yr:.0f}/mo 2yr ago)"
+            else:
+                s += f", steady (was {rate_2yr:.0f}/mo 2yr ago)"
+        s += f" [{n_outliers} outlier{'s' if n_outliers != 1 else ''} removed]"
+        return s
+
     table_data = {
         "Metric": [
             "Unique Products (Variants)",
@@ -1524,8 +1580,8 @@ def page_executive_summary(biz_data):
             "Main Product",
             "Main Product Reviews",
             "Rating Trend (Main)",
-            "Review Growth (Main, reviews/mo)",
-            "Review Growth Direction",
+            "Review Growth",
+            "Review Growth (No Outliers)",
             "Data Range (Main)",
             "Data Source",
         ],
@@ -1536,8 +1592,8 @@ def page_executive_summary(biz_data):
             short_title(w["main_title"], 50),
             f"{w['main_reviews']:,}",
             f"{w['rating_periods']['1yr']['from_rating']:.1f} → {w['rating_periods']['1yr']['to_rating']:.1f} ({w['rating_periods']['1yr']['delta']:+.2f}, {w['rating_periods']['1yr']['from_month']} → now)" if '1yr' in w.get('rating_periods', {}) else f"{w['main_r_dir']} ({w['main_early_r']:.1f} -> {w['main_recent_r']:.1f})",
-            f"{w['review_periods']['1yr']['per_month']:.1f} reviews/mo (1yr)" if '1yr' in w.get('review_periods', {}) else f"{w['main_growth_per_mo']:.1f} reviews/mo (full history)",
-            f"{w['review_periods']['1yr']['per_month']:.1f}/mo (1yr) vs {w['review_periods']['2yr']['per_month']:.1f}/mo (2yr) — {'slowing' if w['review_periods']['1yr']['per_month'] < w['review_periods']['2yr']['per_month'] * 0.9 else 'accelerating' if w['review_periods']['1yr']['per_month'] > w['review_periods']['2yr']['per_month'] * 1.1 else 'steady'}" if '1yr' in w.get('review_periods', {}) and '2yr' in w.get('review_periods', {}) else f"{w['growth_dir']} (early {w['early_growth_mo']:.1f} -> recent {w['recent_growth_mo']:.1f} reviews/mo)",
+            (f"{w['review_periods']['1yr']['per_month']:.0f} reviews/mo, {'slowing' if w['review_periods']['1yr']['per_month'] < w['review_periods']['2yr']['per_month'] * 0.9 else 'accelerating' if w['review_periods']['1yr']['per_month'] > w['review_periods']['2yr']['per_month'] * 1.1 else 'steady'} (was {w['review_periods']['2yr']['per_month']:.0f}/mo 2yr ago)" if '1yr' in w.get('review_periods', {}) and '2yr' in w.get('review_periods', {}) else f"{w['review_periods']['1yr']['per_month']:.0f} reviews/mo, {w['growth_dir']}" if '1yr' in w.get('review_periods', {}) else f"{w['main_growth_per_mo']:.0f} reviews/mo (full history)"),
+            _fmt_clean_growth(w),
             f"{w['main_first_date']} to {w['main_last_date']}",
             "Keepa API (complete)",
         ],
@@ -1548,8 +1604,8 @@ def page_executive_summary(biz_data):
             short_title(t["main_title"], 50),
             f"{t['main_reviews']:,}",
             f"{t['rating_periods']['1yr']['from_rating']:.1f} → {t['rating_periods']['1yr']['to_rating']:.1f} ({t['rating_periods']['1yr']['delta']:+.2f}, {t['rating_periods']['1yr']['from_month']} → now)" if '1yr' in t.get('rating_periods', {}) else f"{t['main_r_dir']} ({t['main_early_r']:.1f} -> {t['main_recent_r']:.1f})",
-            f"{t['review_periods']['1yr']['per_month']:.1f} reviews/mo (1yr)" if '1yr' in t.get('review_periods', {}) else f"{t['main_growth_per_mo']:.1f} reviews/mo (full history)",
-            f"{t['review_periods']['1yr']['per_month']:.1f}/mo (1yr) vs {t['review_periods']['2yr']['per_month']:.1f}/mo (2yr) — {'slowing' if t['review_periods']['1yr']['per_month'] < t['review_periods']['2yr']['per_month'] * 0.9 else 'accelerating' if t['review_periods']['1yr']['per_month'] > t['review_periods']['2yr']['per_month'] * 1.1 else 'steady'}" if '1yr' in t.get('review_periods', {}) and '2yr' in t.get('review_periods', {}) else f"{t['growth_dir']} (early {t['early_growth_mo']:.1f} -> recent {t['recent_growth_mo']:.1f} reviews/mo)",
+            (f"{t['review_periods']['1yr']['per_month']:.0f} reviews/mo, {'slowing' if t['review_periods']['1yr']['per_month'] < t['review_periods']['2yr']['per_month'] * 0.9 else 'accelerating' if t['review_periods']['1yr']['per_month'] > t['review_periods']['2yr']['per_month'] * 1.1 else 'steady'} (was {t['review_periods']['2yr']['per_month']:.0f}/mo 2yr ago)" if '1yr' in t.get('review_periods', {}) and '2yr' in t.get('review_periods', {}) else f"{t['review_periods']['1yr']['per_month']:.0f} reviews/mo, {t['growth_dir']}" if '1yr' in t.get('review_periods', {}) else f"{t['main_growth_per_mo']:.0f} reviews/mo (full history)"),
+            _fmt_clean_growth(t),
             f"{t['main_first_date']} to {t['main_last_date']}",
             "Keepa API (complete)",
         ],
@@ -1745,6 +1801,65 @@ def page_executive_summary(biz_data):
                     vel_values.append(round(per_month, 1))
                 freq_df = pd.DataFrame({"date": vel_months, "freq": vel_values})
 
+        # --- Avg Reviews/Mo summary bar charts ---
+        recent_freq_all = freq_df[freq_df["date"] >= cutoff]["freq"] if not freq_df.empty else pd.Series(dtype=float)
+        prior_freq_all = freq_df[(freq_df["date"] >= prior_start) & (freq_df["date"] < cutoff)]["freq"] if not freq_df.empty else pd.Series(dtype=float)
+
+        def _iqr_filter(s):
+            if len(s) < 4:
+                return s
+            q1, q3 = s.quantile(0.25), s.quantile(0.75)
+            iqr = q3 - q1
+            return s[(s >= q1 - 1.5 * iqr) & (s <= q3 + 1.5 * iqr)]
+
+        recent_avg = round(recent_freq_all.mean(), 1) if len(recent_freq_all) > 0 else None
+        prior_avg = round(prior_freq_all.mean(), 1) if len(prior_freq_all) > 0 else None
+        recent_clean_s = _iqr_filter(recent_freq_all) if len(recent_freq_all) > 1 else recent_freq_all
+        prior_clean_s = _iqr_filter(prior_freq_all) if len(prior_freq_all) > 1 else prior_freq_all
+        recent_avg_clean = round(recent_clean_s.mean(), 1) if len(recent_clean_s) > 0 else None
+        prior_avg_clean = round(prior_clean_s.mean(), 1) if len(prior_clean_s) > 0 else None
+        n_out_summary = (len(recent_freq_all) - len(recent_clean_s)) + (len(prior_freq_all) - len(prior_clean_s))
+
+        sb1, sb2 = st.columns(2)
+        with sb1:
+            if recent_avg is not None or prior_avg is not None:
+                fig_avg = go.Figure()
+                fig_avg.add_trace(go.Bar(
+                    x=[f"Recent {label}", f"Prior {label}"],
+                    y=[recent_avg, prior_avg],
+                    marker_color=["#EF553B", "#636EFA"],
+                    text=[f"{v}" if v is not None else "" for v in [recent_avg, prior_avg]],
+                    textposition="inside", textfont=dict(color="white", size=14),
+                ))
+                fig_avg.update_layout(
+                    title=f"Avg Reviews/Mo ({label})", height=200,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    yaxis=dict(rangemode="tozero"),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_avg, use_container_width=True, key=f"avg_revmo_{biz_name}_{label}")
+            else:
+                st.info("No review frequency data.")
+        with sb2:
+            if recent_avg_clean is not None or prior_avg_clean is not None:
+                fig_avg_clean = go.Figure()
+                fig_avg_clean.add_trace(go.Bar(
+                    x=[f"Recent {label}", f"Prior {label}"],
+                    y=[recent_avg_clean, prior_avg_clean],
+                    marker_color=["#EF553B", "#636EFA"],
+                    text=[f"{v}" if v is not None else "" for v in [recent_avg_clean, prior_avg_clean]],
+                    textposition="inside", textfont=dict(color="white", size=14),
+                ))
+                fig_avg_clean.update_layout(
+                    title=f"Avg Reviews/Mo, No Outliers ({label}) — {n_out_summary} removed", height=200,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    yaxis=dict(rangemode="tozero"),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_avg_clean, use_container_width=True, key=f"avg_revmo_clean_{biz_name}_{label}")
+            else:
+                st.info("No review frequency data after outlier removal.")
+
         # Rating: highlighted avg vs rest avg
         r_highlighted_avg = None
         r_rest_avg = None
@@ -1759,7 +1874,7 @@ def page_executive_summary(biz_data):
         f_rest_avg = prior_per_mo
 
         prior_start_str = prior_start.strftime("%Y-%m")
-        cb1, cb2, cb3 = st.columns(3)
+        cb1, cb2, cb3, cb4 = st.columns(4)
         with cb1:
             if r_highlighted_avg is not None or r_rest_avg is not None:
                 fig_rb = go.Figure()
@@ -1824,14 +1939,49 @@ def page_executive_summary(biz_data):
                 st.plotly_chart(fig_box, use_container_width=True, key=f"freq_box_{biz_name}_{label}")
             else:
                 st.info("Not enough data points for box plot.")
+        with cb4:
+            # Box plot with outliers removed (IQR method)
+            def _remove_outliers(s):
+                if len(s) < 4:
+                    return s
+                q1, q3 = s.quantile(0.25), s.quantile(0.75)
+                iqr = q3 - q1
+                return s[(s >= q1 - 1.5 * iqr) & (s <= q3 + 1.5 * iqr)]
+            recent_clean = _remove_outliers(recent_freq) if len(recent_freq) > 1 else recent_freq
+            prior_clean = _remove_outliers(prior_freq) if len(prior_freq) > 1 else prior_freq
+            n_outliers_removed = (len(recent_freq) - len(recent_clean)) + (len(prior_freq) - len(prior_clean))
+            if len(recent_clean) > 1 or len(prior_clean) > 1:
+                fig_box2 = go.Figure()
+                if len(prior_clean) > 1:
+                    fig_box2.add_trace(go.Box(
+                        y=prior_clean, name=f"Prior {label}",
+                        marker_color="#636EFA", boxmean=True,
+                    ))
+                if len(recent_clean) > 1:
+                    fig_box2.add_trace(go.Box(
+                        y=recent_clean, name=f"Recent {label}",
+                        marker_color="#EF553B", boxmean=True,
+                    ))
+                fig_box2.update_layout(
+                    title=f"No Outliers ({label}) — {n_outliers_removed} removed", height=220,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    yaxis=dict(rangemode="tozero"),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_box2, use_container_width=True, key=f"freq_box_clean_{biz_name}_{label}")
+            else:
+                st.info("Not enough data after outlier removal.")
 
     st.caption(
         "**How chart values are calculated:** "
         "• **Avg Rating** = mean of all Keepa rating snapshots within the window. "
+        "• **Avg Reviews/Mo** = mean of monthly review counts for each period. "
+        "• **Avg Reviews/Mo, No Outliers** = same average after removing IQR outlier months. "
         "• **New Reviews per Month** = reviews added per calendar month (last Keepa snapshot each month minus previous month). "
         "Green bars = reviews added, red bars = reviews removed (Amazon purges). "
         "• **Reviews/Month Distribution box plot** = spread of monthly review counts; diamond = mean, line = median. "
         "Shows whether review velocity is steady or variable. "
+        "• **Distribution, No Outliers** = same box plot with IQR outliers removed, showing the core spread without extreme months. "
         "• **Recent** = the selected time window ending today. **Prior** = the same-length window immediately before it."
     )
 
@@ -1852,7 +2002,13 @@ def page_business_analysis(biz_data, biz_name):
     cols[1].metric("Total Reviews", f"{metrics['total_reviews']:,}")
     cols[2].metric("Avg Rating", f"{metrics['weighted_avg_rating']:.1f}" if metrics["weighted_avg_rating"] else "?")
     _kpi_rate = metrics["review_periods"]["1yr"]["per_month"] if "1yr" in metrics.get("review_periods", {}) else metrics["review_periods"].get("6mo", {}).get("per_month", metrics["main_growth_per_mo"])
-    cols[3].metric("Review Growth (reviews/mo, 1yr)", f"{_kpi_rate:.1f}")
+    _kpi_clean = metrics["review_periods_clean"].get("1yr", metrics["review_periods_clean"].get("6mo", {}))
+    _kpi_clean_rate = _kpi_clean.get("per_month") if _kpi_clean else None
+    if _kpi_clean_rate is not None and metrics["review_outliers_removed"] > 0:
+        _kpi_delta = f"{_kpi_clean_rate:.1f}/mo without {metrics['review_outliers_removed']} outliers"
+        cols[3].metric("Review Growth (reviews/mo, 1yr)", f"{_kpi_rate:.1f}", delta=_kpi_delta, delta_color="off")
+    else:
+        cols[3].metric("Review Growth (reviews/mo, 1yr)", f"{_kpi_rate:.1f}")
     cols[4].metric("Rating Trend", metrics["main_r_dir"])
     if metrics["main_rank_recent"] is not None:
         current_rank = metrics["main_rank_recent"]
@@ -2308,29 +2464,50 @@ def page_evaluation(biz_data, biz_name):
         """Return (pros, cons) for review growth changes over time windows."""
         pros, cons = [], []
         periods = metrics.get("review_periods", {})
+        clean = metrics.get("review_periods_clean", {})
+        n_outliers = metrics.get("review_outliers_removed", 0)
         # Compare 1yr rate vs 2yr rate to detect acceleration/deceleration
         if "1yr" in periods and "2yr" in periods:
             recent_rate = periods["1yr"]["per_month"]
             longer_rate = periods["2yr"]["per_month"]
+            _clean_1yr = clean.get("1yr", {}).get("per_month")
+            _clean_2yr = clean.get("2yr", {}).get("per_month")
+            _clean_note = f" (after removing {n_outliers} outlier months: {_clean_1yr:.0f}/mo vs {_clean_2yr:.0f}/mo)" if _clean_1yr is not None and _clean_2yr is not None and n_outliers > 0 else ""
             if recent_rate < longer_rate * 0.7:
                 cons.append(
-                    f"New reviews are slowing down. Over the last year, the product averaged {recent_rate:.0f} new reviews per month, compared to {longer_rate:.0f} per month over the last 2 years. This suggests fewer new customers."
+                    f"New reviews are slowing down. Over the last year, the product averaged {recent_rate:.0f} new reviews per month, compared to {longer_rate:.0f} per month over the last 2 years{_clean_note}. This suggests fewer new customers."
                 )
             elif recent_rate > longer_rate * 1.3:
                 pros.append(
-                    f"New reviews are speeding up. Over the last year, the product averaged {recent_rate:.0f} new reviews per month, compared to {longer_rate:.0f} per month over the last 2 years. This suggests more new customers."
+                    f"New reviews are speeding up. Over the last year, the product averaged {recent_rate:.0f} new reviews per month, compared to {longer_rate:.0f} per month over the last 2 years{_clean_note}. This suggests more new customers."
+                )
+        # Outlier-removed comparison
+        if "1yr" in clean and "1yr" in periods and n_outliers > 0:
+            raw_rate = periods["1yr"]["per_month"]
+            clean_rate = clean["1yr"]["per_month"]
+            diff_pct = abs(clean_rate - raw_rate) / max(raw_rate, 0.1) * 100
+            if diff_pct > 15:
+                cons.append(
+                    f"After removing {n_outliers} outlier month(s), the 1yr review rate changes from {raw_rate:.0f} to {clean_rate:.0f} reviews/mo ({diff_pct:.0f}% difference). The raw number may be inflated by spike months."
+                )
+            elif n_outliers > 0:
+                pros.append(
+                    f"After removing {n_outliers} outlier month(s), the 1yr review rate barely changes ({raw_rate:.0f} → {clean_rate:.0f} reviews/mo). Growth is consistent and not driven by spikes."
                 )
         # Show 6mo rate if notably different from 1yr
         if "6mo" in periods and "1yr" in periods:
             rate_6mo = periods["6mo"]["per_month"]
             rate_1yr = periods["1yr"]["per_month"]
+            _c6 = clean.get("6mo", {}).get("per_month")
+            _c1 = clean.get("1yr", {}).get("per_month")
+            _cn = f" (after outlier removal: {_c6:.0f}/mo vs {_c1:.0f}/mo)" if _c6 is not None and _c1 is not None and n_outliers > 0 else ""
             if rate_6mo < rate_1yr * 0.7:
                 cons.append(
-                    f"The most recent 6 months show only {rate_6mo:.0f} new reviews per month, compared to {rate_1yr:.0f} per month over the full last year. Sales may be slowing down recently."
+                    f"The most recent 6 months show only {rate_6mo:.0f} new reviews per month, compared to {rate_1yr:.0f} per month over the full last year{_cn}. Sales may be slowing down recently."
                 )
             elif rate_6mo > rate_1yr * 1.3:
                 pros.append(
-                    f"The most recent 6 months show {rate_6mo:.0f} new reviews per month, compared to {rate_1yr:.0f} per month over the full last year. Sales appear to be picking up recently."
+                    f"The most recent 6 months show {rate_6mo:.0f} new reviews per month, compared to {rate_1yr:.0f} per month over the full last year{_cn}. Sales appear to be picking up recently."
                 )
         return pros, cons
 
@@ -2350,10 +2527,14 @@ def page_evaluation(biz_data, biz_name):
         if _recent_rate is None:
             _recent_rate = m["main_growth_per_mo"]
             _recent_rate_label = "full history"
+        _clean_p = m.get("review_periods_clean", {}).get(_recent_rate_label, {})
+        _clean_rate = _clean_p.get("per_month")
+        _n_out = m.get("review_outliers_removed", 0)
+        _rate_note = f" ({_clean_rate:.0f}/mo after removing {_n_out} outlier months)" if _clean_rate is not None and _n_out > 0 else ""
         pros = [
             f"10-year brand, 4.6 stars across {m['main_reviews']:,} reviews — exceptional longevity",
             f"Rating STABLE at 4.4-4.6 over full history — no quality degradation",
-            f"Main product adding ~{_recent_rate:.0f} new reviews/month (last {_recent_rate_label})",
+            f"Main product adding ~{_recent_rate:.0f} new reviews/month (last {_recent_rate_label}){_rate_note}",
             f"{m['n_variations']} color variants from just {m['n_products']} products = efficient SKU strategy",
             "Ultra-low unit cost ($1.65-1.81) = massive tariff buffer",
             "Category leader in phone wallets — well-established with strong sales history",
@@ -2394,11 +2575,16 @@ def page_evaluation(biz_data, biz_name):
             if p_rank and len(p_rank) >= 2:
                 p_months = sorted(p_rank.keys())
                 p_early, p_recent = p_rank[p_months[0]], p_rank[p_months[-1]]
-                if p_recent > p_early * 3 and p_recent > 100_000:
-                    category = BIZ_CATEGORY.get(biz_name, "the category")
+                category = BIZ_CATEGORY.get(biz_name, "the category")
+                if p_recent > p_early * 3 and p_recent > 500_000:
                     rank_cons_extra.append(
                         f"{product_name(p, short=True)} went from a sales rank of about {p_early:,.0f} to about {p_recent:,.0f} "
                         f"in the '{category}' category ({p_months[0]} to {p_months[-1]}). A rank this high means the product is barely selling."
+                    )
+                elif p_recent > p_early * 3 and p_recent > 100_000:
+                    rank_cons_extra.append(
+                        f"{product_name(p, short=True)} went from a sales rank of about {p_early:,.0f} to about {p_recent:,.0f} "
+                        f"in the '{category}' category ({p_months[0]} to {p_months[-1]}). Sales have declined significantly, though the product may still generate some revenue."
                     )
         # Use most recent period rate (1yr preferred, fallback to 6mo, then full-history)
         _recent_rate = None
@@ -2410,19 +2596,27 @@ def page_evaluation(biz_data, biz_name):
         if _recent_rate is None:
             _recent_rate = m["main_growth_per_mo"]
             _recent_rate_label = "full history"
+        _clean_p = m.get("review_periods_clean", {}).get(_recent_rate_label, {})
+        _clean_rate = _clean_p.get("per_month")
+        _n_out = m.get("review_outliers_removed", 0)
+        _rate_note = f" ({_clean_rate:.0f}/mo after removing {_n_out} outlier months)" if _clean_rate is not None and _n_out > 0 else ""
         pros = [
             f"The main Sand Timer product has a 4.4-star rating with {products[0]['shared_reviews']:,} reviews, making it one of the top sellers in its category.",
             f"The Toothbrush Timer has a 4.6-star rating with {products[1]['shared_reviews']:,} reviews, which is stronger than what the seller originally reported.",
             "The main timer comes in 16 color options, which makes it harder for new competitors to match the full selection.",
             "This business is listed on Empire Flippers (Listing #92221), meaning a broker has reviewed and verified it.",
-            f"The business is adding about {_recent_rate:.0f} new reviews per month over the last {_recent_rate_label}, which shows a steady flow of new customers.",
+            f"The business is adding about {_recent_rate:.0f} new reviews per month over the last {_recent_rate_label}{_rate_note}, which shows a steady flow of new customers.",
             "There are two strong products (Sand Timer at 4.4 stars and Toothbrush Timer at 4.6 stars), so the business is not relying on just one item.",
         ] + rank_pros + rating_pros + review_pros
         cons = [
             f"The main product's star rating has gone down slightly, from {m['main_early_r']:.1f} to {m['main_recent_r']:.1f} stars.",
             "The 60-Minute Timer is the weakest product, with only a 3.4-star rating and just 16 reviews.",
             "Profit margins may be thin. You should verify the cost breakdown and check how rising tariffs or advertising costs could eat into profits.",
-            f"In the last 6 months, new reviews came in at {m['review_periods']['6mo']['per_month']:.0f} per month, compared to {m['review_periods']['1yr']['per_month']:.0f} per month over the last year. This suggests recent sales momentum is slowing down." if '6mo' in m.get('review_periods', {}) and '1yr' in m.get('review_periods', {}) and m['review_periods']['6mo']['per_month'] < m['review_periods']['1yr']['per_month'] * 0.8 else f"Review growth is {m['growth_dir'].lower()} when comparing the first half of its history to the second half.",
+            (f"In the last 6 months, new reviews came in at {m['review_periods']['6mo']['per_month']:.0f} per month, compared to {m['review_periods']['1yr']['per_month']:.0f} per month over the last year"
+             + (f" (after outlier removal: {m['review_periods_clean']['6mo']['per_month']:.0f}/mo vs {m['review_periods_clean']['1yr']['per_month']:.0f}/mo)" if '6mo' in m.get('review_periods_clean', {}) and '1yr' in m.get('review_periods_clean', {}) else "")
+             + ". This suggests recent sales momentum is slowing down.")
+            if '6mo' in m.get('review_periods', {}) and '1yr' in m.get('review_periods', {}) and m['review_periods']['6mo']['per_month'] < m['review_periods']['1yr']['per_month'] * 0.8
+            else f"Review growth is {m['growth_dir'].lower()} when comparing the first half of its history to the second half.",
             "This listing fails 2 of the acquisition checklist criteria: the business is less than 5 years old, and the asking price is more than 30 times monthly earnings.",
         ] + rank_cons + rank_cons_extra + rating_cons + review_cons
         questions = [
@@ -2434,7 +2628,7 @@ def page_evaluation(biz_data, biz_name):
         ]
         rank_note = _rank_summary_note(m)
         if rank_cons_extra:
-            rank_note += f" {len(rank_cons_extra)} product(s) have seen their sales rank collapse, suggesting they are barely selling."
+            rank_note += f" {len(rank_cons_extra)} product(s) have seen their sales rank decline sharply — verify actual unit sales for these SKUs."
         summary = (
             f"The Toothbrush Timer at 4.6 stars is the strongest product in the portfolio. The core Sand Timer "
             f"line at 4.4 stars with {products[0]['shared_reviews']:,} reviews is solid. The only weak spot is the "
@@ -2471,6 +2665,7 @@ def page_evaluation(biz_data, biz_name):
     st.caption(
         "How the main product's key metrics changed over the last 6 months, 1 year, and 2 years. "
         "Rating = star rating (out of 5). Reviews/mo = average new reviews added per month in that period. "
+        "Reviews/mo (clean) = same metric after removing IQR outlier months. "
         f"Sales rank = position in the '{BIZ_CATEGORY.get(biz_name, 'category')}' category (lower = more sales; negative % change = rank improved)."
     )
     trend_rows = []
@@ -2490,6 +2685,12 @@ def page_evaluation(biz_data, biz_name):
         else:
             row["Reviews Added"] = "—"
             row["Reviews/mo"] = "—"
+        # Reviews per month (outlier-removed)
+        if label in m.get("review_periods_clean", {}):
+            rvpc = m["review_periods_clean"][label]
+            row["Reviews/mo (clean)"] = f"{rvpc['per_month']:.1f}"
+        else:
+            row["Reviews/mo (clean)"] = "—"
         # Sales rank
         if label in m.get("main_rank_periods", {}):
             srp = m["main_rank_periods"][label]
@@ -3109,6 +3310,19 @@ Where:
 
 **Example:** A product starts with 500 reviews in Jan 2022 and reaches 2,000 reviews by Jan 2024.
 Growth = (2,000 - 500) / 24 months = **62.5 reviews/month**
+
+---
+
+#### Review Growth (No Outliers) — IQR Outlier Removal
+
+We compute monthly review frequencies ($f_i$ = reviews added per month), then remove months that fall outside the **IQR fence**: below $Q_1 - 1.5 \\times \\text{IQR}$ or above $Q_3 + 1.5 \\times \\text{IQR}$, where $Q_1$ is the 25th percentile, $Q_3$ is the 75th percentile, and $\\text{IQR} = Q_3 - Q_1$.
+
+This keeps months whose review velocity falls within the normal range (~95% of months in a typical distribution) and discards extreme spikes (promotions, giveaways, viral events) or extreme drops (Amazon purges). The average reviews/mo is then recalculated from the remaining months. A large gap between the raw and clean rate means growth depends on unsustainable spikes; a small gap means growth is consistent.
+
+**Example:** Monthly frequencies: [20, 25, 22, 18, **300**, 24, 21, 19, **-50**, 23, 26, 20]
+$Q_1 = 19.5$, $Q_3 = 25.5$, $\\text{IQR} = 6.0$ → bounds: $[10.5, 34.5]$
+Months at 300 and -50 fall outside → **2 outliers removed**.
+Raw avg = 39/mo → Clean avg = 22/mo (44% lower — the raw number was inflated by one spike month).
 
 ---
 
